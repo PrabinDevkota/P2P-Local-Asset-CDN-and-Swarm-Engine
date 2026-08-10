@@ -1,0 +1,41 @@
+# Build
+**/target/
+**/build/
+*.class
+*.jar
+*.war
+*.ear
+hs_err_pid*
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.classpath
+.project
+.settings/
+.factorypath
+.apt_generated
+.springBeans
+.sts4-cache/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Logs
+*.log
+logs/
+
+# Maven wrapper jar (downloaded locally)
+.mvn/wrapper/maven-wrapper.jar

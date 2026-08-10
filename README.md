@@ -101,11 +101,22 @@ Length-prefixed frames (no HTTP on the hot path):
 | Chunk poisoning | Hash fail → close channel, blacklist peer ~10 min |
 | NAT / no LAN peers | Origin HTTP CDN fallback after ~5s |
 
+## Repo layout
+
+```
+/
+├── README.md
+├── PROJECT_STANDARDS.md
+└── tracker/          # Spring Boot + Redis tracker (scaffold)
+```
+
 ## Status
 
-Specification-complete; implementation not started in this repo yet. Next steps: tracker service, Netty peer agent, manifest tooling, and the multi-container swarm test harness described in the technical spec.
+- Spec + standards docs: done
+- `tracker/`: Spring Boot scaffold (Web + Redis) — APIs not implemented yet
+- Next: tracker announce/peers APIs, then Netty peer agent, manifest tooling, Compose swarm tests
 
-For the full industry-standard checklist (docs, security, testing, CI/CD, ops, success metrics — no code yet), see [PROJECT_STANDARDS.md](./PROJECT_STANDARDS.md).
+Industry checklist: [PROJECT_STANDARDS.md](./PROJECT_STANDARDS.md)
 
 ## Reference
 
