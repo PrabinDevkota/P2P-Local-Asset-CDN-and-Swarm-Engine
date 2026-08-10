@@ -105,6 +105,8 @@ Length-prefixed frames (no HTTP on the hot path):
 
 Specification-complete; implementation not started in this repo yet. Next steps: tracker service, Netty peer agent, manifest tooling, and the multi-container swarm test harness described in the technical spec.
 
+For the full industry-standard checklist (docs, security, testing, CI/CD, ops, success metrics — no code yet), see [PROJECT_STANDARDS.md](./PROJECT_STANDARDS.md).
+
 ## Reference
 
 See `P2P_Asset_CDN_Technical_Specification.docx` (parent folder) for the full architectural blueprint and sample Netty/Docker snippets.
