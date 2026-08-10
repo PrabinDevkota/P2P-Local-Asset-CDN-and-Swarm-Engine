@@ -107,14 +107,16 @@ Length-prefixed frames (no HTTP on the hot path):
 /
 ├── README.md
 ├── PROJECT_STANDARDS.md
-└── tracker/          # Spring Boot + Redis tracker (scaffold)
+├── tracker/          # Spring Boot + Redis tracker (scaffold)
+└── swarm-node/       # Plain Maven + Netty peer (scaffold)
 ```
 
 ## Status
 
 - Spec + standards docs: done
 - `tracker/`: Spring Boot scaffold (Web + Redis) — APIs not implemented yet
-- Next: tracker announce/peers APIs, then Netty peer agent, manifest tooling, Compose swarm tests
+- `swarm-node/`: plain Maven + Netty/Jackson/SLF4J scaffold — protocol not implemented yet
+- Next: tracker announce/peers APIs, then Netty framing/handshake, chunker/manifest, Compose swarm tests
 
 Industry checklist: [PROJECT_STANDARDS.md](./PROJECT_STANDARDS.md)
 
