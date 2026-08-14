@@ -31,35 +31,40 @@ Working name: **SwarmEdge CDN** · Core scheduler research: **LAPS**
 
 ## 3. Repository Structure
 
-**Current scaffolds (present):**
+**Phase 0 layout:**
 
 ```
 /
-├── README.md
-├── PROJECT_STANDARDS.md
-├── tracker/                 # Spring Boot + Redis control plane
-└── swarm-node/              # Netty peer data plane
+├── pom.xml
+├── common/
+├── protocol/
+├── manifest-tool/
+├── tracker-service/
+├── peer-agent/
+├── origin-fixture/
+├── benchmark-runner/
+├── docs/
+├── infra/
+└── research/
 ```
 
-**Target monorepo (Phase 0+, not created yet):** `common/`, `protocol/`, `manifest-tool/`, `tracker-service/`, `peer-agent/`, `origin-fixture/`, `benchmark-runner/`, `infra/`, `docs/`, `research/`
-
-- [ ] Single source of truth for protocol/manifest
-- [ ] Control plane has no Netty file-transfer logic
-- [ ] Peer does not treat tracker as content trust
+- [x] Single source of truth for protocol/manifest (`docs/` + `protocol/` + `manifest-tool/`)
+- [x] Control plane has no Netty file-transfer logic
+- [x] Peer does not treat tracker as content trust
 - [ ] SemVer releases
 
 ---
 
 ## 4. Core Product Components
 
-### Tracker (`tracker/` → tracker-service)
+### Tracker (`tracker-service/`)
 - [ ] `POST /api/v1/peers/announce` with validation + **observed IP**
 - [ ] `GET /api/v1/assets/{assetId}/peers?limit=20` bounded ranking
 - [ ] Redis hash + **per-field TTL ~45s** (HEXPIRE / Redis ≥ 7.4)
 - [ ] Locality via siteId/networkGroupId (not hard-coded `/24`)
 - [ ] Rate limits, peer tokens (dev/research), Actuator health/metrics
 
-### Peer agent (`swarm-node/` → peer-agent)
+### Peer agent (`peer-agent/`)
 - [ ] Roles: LEECHER / SEEDER / EDGE (same binary)
 - [ ] Protocol v1: HELLO, BITFIELD, HAVE, REQUEST, BLOCK, CANCEL, PING/PONG, ERROR
 - [ ] Streaming BLOCK receive; header + FileRegion send where compatible

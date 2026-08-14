@@ -9,7 +9,7 @@ This is both an engineering system and a research testbed. The first paper focus
 ## First principles (how the pieces connect)
 
 1. **Trust ≠ transfer.** A signed manifest says *what* bytes are valid. Peers are untrusted byte sources. The tracker never decides content truth and never carries file bytes.
-2. **Control plane ≠ data plane.** `tracker/` (Spring Boot + Redis) answers “who might have this asset nearby?” `swarm-node/` (Netty) moves blocks over a binary TCP protocol.
+2. **Control plane ≠ data plane.** `tracker-service/` (Spring Boot + Redis) answers “who might have this asset nearby?” `peer-agent/` (Netty) moves blocks over protocol v1.
 3. **Chunk ≠ block.** A **chunk** (default 4 MiB) is the integrity/cache unit (SHA-256). A **block** (default 256 KiB) is the network request unit inside a chunk.
 4. **Locality is policy, not `/24`.** Peers carry `siteId` + `networkGroupId`; the tracker returns a *bounded ranked* candidate list. The peer still picks sources using measured RTT/goodput (LAPS later).
 5. **Measure, don’t promise.** Offload % and Mbps are experiment outcomes — not guaranteed SLOs in docs.
@@ -19,17 +19,17 @@ This is both an engineering system and a research testbed. The first paper focus
 | Plane | Who | Job |
 | --- | --- | --- |
 | Trust | Publisher + signed manifest | Authorize the release |
-| Control | `tracker/` | Announce, TTL peer state, ranked candidates |
-| Data | `swarm-node/` | HELLO → BITFIELD → REQUEST/BLOCK/CANCEL |
+| Control | `tracker-service/` | Announce, TTL peer state, ranked candidates |
+| Data | `peer-agent/` | HELLO → BITFIELD → REQUEST/BLOCK/CANCEL |
 | Storage | peer local cache (later) | Content-addressed verified chunks |
 
 ```
-[ tracker: Spring Boot + Redis ]
+[ tracker-service: Spring Boot + Redis ]
         │  POST /api/v1/peers/announce
         │  GET  /api/v1/assets/{assetId}/peers
         ▼
 ┌──────────────┐   Netty protocol v1    ┌──────────────┐
-│ swarm-node A │◄══════════════════════►│ swarm-node B │
+│ peer-agent A │◄══════════════════════►│ peer-agent B │
 │ (SEEDER/EDGE)│   blocks over TCP      │ (LEECHER)    │
 └──────────────┘                        └──────────────┘
         │                                      │
@@ -112,29 +112,37 @@ No public DHT/BitTorrent replacement, no crypto incentives, no AI scheduling, no
 
 | Layer | Baseline |
 | --- | --- |
-| JDK | **Java 25 LTS** (blueprint also allows 21; pin one LTS and keep both modules identical) |
+| JDK | **Java 21** (`maven.compiler.release`); CI uses Temurin 21. JDK 25 can compile `--release 21`. |
 | Tracker | Spring Boot 4.1.x + Redis ≥ 7.4 |
 | Peer | Netty **4.2.x** + Jackson + SLF4J |
 | Orchestration | Docker Compose (later) |
 
-## Repo layout (current)
+## Repo layout (Phase 0)
 
 ```
 /
-├── README.md
-├── PROJECT_STANDARDS.md
-├── tracker/       # control plane scaffold → future tracker-service
-└── swarm-node/    # data plane scaffold → future peer-agent
+├── pom.xml
+├── common/
+├── protocol/
+├── manifest-tool/
+├── tracker-service/
+├── peer-agent/
+├── origin-fixture/
+├── benchmark-runner/
+├── docs/
+├── test-fixtures/
+├── infra/
+├── research/
+└── scripts/
 ```
 
-Phase 0 will later reshape this into a multi-module Maven monorepo (`common`, `protocol`, `manifest-tool`, …). **Not done yet** — do not invent parallel trees casually.
+Contracts: [docs/manifest-v1.md](docs/manifest-v1.md), [docs/protocol-v1.md](docs/protocol-v1.md), [docs/STATUS.md](docs/STATUS.md).
 
 ## Status
 
-- Idea-stage docs corrected to the implementation/research blueprint
-- `tracker/`: Spring Boot + Redis scaffold only (no announce/ranking yet)
-- `swarm-node/`: Netty/Jackson/SLF4J scaffold only (no protocol codecs yet)
-- **Next:** Phase 0 — freeze manifest/protocol contracts + Maven skeleton (no transfer code until contracts exist)
+**Phase 0 (architecture freeze) is implemented.** Next is Phase 1: chunker, sign/verify CLI, chunk store. Do not start Netty peer sessions until `./mvnw verify` stays green.
+
+Industry checklist: [PROJECT_STANDARDS.md](./PROJECT_STANDARDS.md)
 
 ## References
 
