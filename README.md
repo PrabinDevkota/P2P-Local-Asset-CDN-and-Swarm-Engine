@@ -1,125 +1,142 @@
 # P2P Local Asset CDN & Swarm Engine
 
-Enterprise-grade peer-to-peer local asset CDN that offloads large file downloads (game updates, OS patches, video) from WAN/cloud origin to LAN peers — cutting egress cost and saturating gigabit local links with Netty zero-copy I/O and SHA-256 chunk integrity.
+Working name: **SwarmEdge CDN**
 
-## Problem
+Managed peer-assisted CDN for large enterprise assets. Clients verify a **signed release manifest**, discover nearby capable peers, download **blocks** from multiple sources, reuse verified cached **chunks**, and fall back progressively **peer → site edge → origin**.
 
-When a large asset ships, every device on the same LAN fetches the same multi-GB file from the cloud. That burns WAN bandwidth, raises egress bills, and slows downloads for everyone.
+This is both an engineering system and a research testbed. The first paper focuses on **LAPS** (Locality-Aware Performance Scheduler) and hybrid fallback — not on inventing BitTorrent, QUIC, or FastCDC.
 
-## Goals
+## First principles (how the pieces connect)
 
-| Objective | Target |
-| --- | --- |
-| WAN offload | ~80–90% of transfer volume via same-subnet peers |
-| Throughput | 800+ Mbps line-rate over LAN (non-blocking zero-copy I/O) |
-| Integrity | Mandatory SHA-256 per chunk before disk write or seeding |
-| Fairness | Tit-for-tat choke/unchoke so leechers must upload |
+1. **Trust ≠ transfer.** A signed manifest says *what* bytes are valid. Peers are untrusted byte sources. The tracker never decides content truth and never carries file bytes.
+2. **Control plane ≠ data plane.** `tracker/` (Spring Boot + Redis) answers “who might have this asset nearby?” `swarm-node/` (Netty) moves blocks over a binary TCP protocol.
+3. **Chunk ≠ block.** A **chunk** (default 4 MiB) is the integrity/cache unit (SHA-256). A **block** (default 256 KiB) is the network request unit inside a chunk.
+4. **Locality is policy, not `/24`.** Peers carry `siteId` + `networkGroupId`; the tracker returns a *bounded ranked* candidate list. The peer still picks sources using measured RTT/goodput (LAPS later).
+5. **Measure, don’t promise.** Offload % and Mbps are experiment outcomes — not guaranteed SLOs in docs.
 
-## Architecture
+## Planes
 
-Three tiers:
-
-1. **Central Tracker** (Spring Boot + Redis) — peer announce, subnet-aware peer lists; never carries file bytes
-2. **Seeder nodes** — hold complete (or enough) chunks
-3. **Leecher nodes** — download, verify, and re-seed chunks over the LAN
+| Plane | Who | Job |
+| --- | --- | --- |
+| Trust | Publisher + signed manifest | Authorize the release |
+| Control | `tracker/` | Announce, TTL peer state, ranked candidates |
+| Data | `swarm-node/` | HELLO → BITFIELD → REQUEST/BLOCK/CANCEL |
+| Storage | peer local cache (later) | Content-addressed verified chunks |
 
 ```
-[ Tracker: Spring Boot + Redis ]
-        │
-        │  POST /announce  ·  GET /peers?infoHash=…
-        │  (returns same-LAN IPs + bitfields)
+[ tracker: Spring Boot + Redis ]
+        │  POST /api/v1/peers/announce
+        │  GET  /api/v1/assets/{assetId}/peers
         ▼
-┌─────────────┐   Netty binary TCP    ┌─────────────┐
-│  Peer A     │◄════════════════════►│  Peer B     │
-│  (Seeder)   │   Zero-Copy FileRegion │  (Leecher)  │
-└─────────────┘                        └─────────────┘
+┌──────────────┐   Netty protocol v1    ┌──────────────┐
+│ swarm-node A │◄══════════════════════►│ swarm-node B │
+│ (SEEDER/EDGE)│   blocks over TCP      │ (LEECHER)    │
+└──────────────┘                        └──────────────┘
+        │                                      │
+        └──────── progressive fallback ────────┘
+                    → EDGE → origin HTTP(S)
 ```
 
-If no reachable LAN peer answers within ~5s, fall back to the central HTTP CDN origin.
+## Manifest (contract direction)
 
-## Manifest
-
-Files are split into fixed chunks (e.g. 2 MB or 4 MB). A JSON manifest lists the info-hash and per-chunk SHA-256 digests:
+Fixed-chunk MVP first. Manifest is signed (Ed25519); peers verify signature + freshness before any transfer. Illustrative shape:
 
 ```json
 {
-  "infoHash": "a8f5f167f44f4964e6c998dee827110c",
-  "fileName": "game-patch-v1.4.bin",
+  "schemaVersion": 1,
+  "productId": "game-x",
+  "version": "1.4.0",
+  "fileName": "game-x-1.4.0.bin",
   "fileSize": 10737418240,
-  "chunkSize": 2097152,
-  "totalChunks": 5120,
-  "chunkHashes": [
-    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "f2ca1bb6c7e907d06dafe4687e579fce76b37e4e93b7605022da52e6ccc26fd2"
-  ]
+  "chunking": { "mode": "FIXED", "chunkSize": 4194304 },
+  "chunks": [
+    { "index": 0, "offset": 0, "length": 4194304, "sha256": "<64 hex chars>" }
+  ],
+  "createdAt": "2026-08-12T00:00:00Z",
+  "expiresAt": "2026-09-12T00:00:00Z",
+  "sequence": 17,
+  "signingKeyId": "release-key-2026-01",
+  "signature": "<base64 Ed25519 over canonical unsigned fields>"
 }
 ```
 
-## Tracker API
+## Tracker API (planned)
 
 | Method | Path | Role |
 | --- | --- | --- |
-| `POST` | `/api/v1/swarm/announce` | Register `{ infoHash, peerId, localIp, port, bitfield }`. Redis hash with **30s TTL** drops stale peers. |
-| `GET` | `/api/v1/swarm/peers` | Return active peers for `infoHash`, preferring same `/24` subnet. |
+| `POST` | `/api/v1/peers/announce` | Register/refresh peer + bitfield + locality labels |
+| `GET` | `/api/v1/assets/{assetId}/peers?limit=20` | Bounded ranked candidates (exclude self) |
+| `GET` | `/api/v1/assets/{assetId}/manifest` | Optional manifest metadata index (not trust root) |
+| `GET` | `/actuator/health` | Liveness/readiness |
 
-## Wire protocol (Netty TCP)
+Redis: `swarm:{assetId}:peers` hash, **per-peer field TTL ~45s** (heartbeat ~15s). Observed IP comes from the connection — do not trust a client-advertised IP alone.
 
-Length-prefixed frames (no HTTP on the hot path):
+## Wire protocol v1 (planned)
+
+All integers unsigned, big-endian.
 
 ```
-| Length (4B) | Message ID (1B) | Payload (variable) |
+| frameLength u32 | version u8 | messageType u8 | flags u16 | requestId u64 | payload... |
 ```
 
-| ID | Name | Payload |
+`frameLength` = bytes **after** the 4-byte length field. `requestId = 0` for unsolicited messages (HAVE/PING).
+
+| ID | Name | Role |
 | --- | --- | --- |
-| `0x01` | HANDSHAKE | InfoHash (32B) + PeerID (16B) |
-| `0x02` | BITFIELD | Bitmask of owned chunks |
-| `0x03` | HAVE | ChunkIndex (4B) |
-| `0x04` | REQUEST | ChunkIndex + Offset + Length |
-| `0x05` | PIECE | ChunkIndex + Offset + bytes |
-| `0x06` / `0x07` | CHOKE / UNCHOKE | Pause or allow requests |
+| `0x01` | HELLO | assetId, peerId, token, capabilities |
+| `0x02` | HELLO_ACK | accept / maxBlockSize / reason |
+| `0x03` | BITFIELD | chunk availability |
+| `0x04` | HAVE | chunkIndex |
+| `0x05` | REQUEST | chunkIndex + blockOffset + blockLength |
+| `0x06` | BLOCK | metadata + raw bytes (FileRegion-capable send) |
+| `0x07` | CANCEL | cancel outstanding requestId |
+| `0x08`/`0x09` | PING/PONG | health |
+| `0x0A` | ERROR | bounded diagnostic |
 
-## Algorithms
+No CHOKE/UNCHOKE in the MVP. Upload is limited by **device upload budget / backpressure**, not public-swarm tit-for-tat.
 
-- **Rarest-first** — pick chunks with lowest availability across peers so the swarm does not stall on rare pieces.
-- **Zero-copy seeding** — `DefaultFileRegion` / `FileChannel.transferTo()` so bytes go kernel page cache → NIC without JVM heap copies or GC spikes.
-- **Verify-then-commit** — on a full piece, `SHA256(data)` must match `manifest.chunkHashes[i]`; on mismatch, drop bytes, penalize peer, re-queue chunk.
-- **Tit-for-tat** — choke freeloaders; unchoke peers that upload back.
+## Scheduling (planned)
 
-## Planned stack
+Two stages (kept separate for experiments):
 
-- **Tracker:** Spring Boot, Redis
-- **Peers:** Netty (custom frame codec + seeder/leecher handlers)
-- **Integrity:** SHA-256 chunk hashes from the manifest
-- **Local test:** Docker Compose (Redis, tracker, seeder, leecher)
+- **A — which chunk/block?** Rarest-first baseline (+ endgame urgency later)
+- **B — which source?** Locality-only (B2) then **LAPS** performance-weighted score (B3)
 
-## Edge cases
+Source priority: local verified cache → healthy local peers → same-site EDGE → limited origin.
 
-| Failure | Mitigation |
+## Explicit non-goals (v1)
+
+No public DHT/BitTorrent replacement, no crypto incentives, no AI scheduling, no QUIC/erasure coding/K8s in the first stable release. FastCDC is a **late** research extension after fixed-chunk baselines are stable.
+
+## Stack (pinned direction)
+
+| Layer | Baseline |
 | --- | --- |
-| Abrupt disconnect mid-transfer | Netty `exceptionCaught` releases buffers; missing chunks re-queued |
-| Chunk poisoning | Hash fail → close channel, blacklist peer ~10 min |
-| NAT / no LAN peers | Origin HTTP CDN fallback after ~5s |
+| JDK | **Java 25 LTS** (blueprint also allows 21; pin one LTS and keep both modules identical) |
+| Tracker | Spring Boot 4.1.x + Redis ≥ 7.4 |
+| Peer | Netty **4.2.x** + Jackson + SLF4J |
+| Orchestration | Docker Compose (later) |
 
-## Repo layout
+## Repo layout (current)
 
 ```
 /
 ├── README.md
 ├── PROJECT_STANDARDS.md
-├── tracker/          # Spring Boot + Redis tracker (scaffold)
-└── swarm-node/       # Plain Maven + Netty peer (scaffold)
+├── tracker/       # control plane scaffold → future tracker-service
+└── swarm-node/    # data plane scaffold → future peer-agent
 ```
+
+Phase 0 will later reshape this into a multi-module Maven monorepo (`common`, `protocol`, `manifest-tool`, …). **Not done yet** — do not invent parallel trees casually.
 
 ## Status
 
-- Spec + standards docs: done
-- `tracker/`: Spring Boot scaffold (Web + Redis) — APIs not implemented yet
-- `swarm-node/`: plain Maven + Netty/Jackson/SLF4J scaffold — protocol not implemented yet
-- Next: tracker announce/peers APIs, then Netty framing/handshake, chunker/manifest, Compose swarm tests
+- Idea-stage docs corrected to the implementation/research blueprint
+- `tracker/`: Spring Boot + Redis scaffold only (no announce/ranking yet)
+- `swarm-node/`: Netty/Jackson/SLF4J scaffold only (no protocol codecs yet)
+- **Next:** Phase 0 — freeze manifest/protocol contracts + Maven skeleton (no transfer code until contracts exist)
 
-Industry checklist: [PROJECT_STANDARDS.md](./PROJECT_STANDARDS.md)
+## References
 
-## Reference
-
-See `P2P_Asset_CDN_Technical_Specification.docx` (parent folder) for the full architectural blueprint and sample Netty/Docker snippets.
+- `P2P_Local_Asset_CDN_Implementation_and_Research_Blueprint.docx` — source of truth for phases, protocol, experiments
+- Older idea-stage docs (tech spec / step guide) are superseded where they conflict with the blueprint

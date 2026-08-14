@@ -1,17 +1,20 @@
-# Swarm node (peer)
+# Swarm node (peer data plane)
 
-Plain Maven + **Netty** peer agent (seeder / leecher). Not Spring Boot — that stays in `tracker/`.
+Plain Maven + **Netty** peer agent (LEECHER / SEEDER / EDGE). Not Spring Boot — that stays in `tracker/`.
+
+**Job:** verify signed manifests, exchange protocol v1 messages, transfer **blocks**, verify **chunks**, seed verified data, fall back to edge/origin when needed.  
+**Not its job:** be the source of release trust, or dump the whole swarm from Redis.
 
 ## Dependencies
 
-- Netty — binary TCP framing and zero-copy transfers
-- Jackson — `manifest.json` parsing
-- SLF4J + Logback — logging
+- Netty 4.2.x — framed TCP + future FileRegion send path
+- Jackson — manifest/API JSON
+- SLF4J + Logback — structured logging later
 
 ## Run
 
 ```powershell
-.\mvnw.cmd compile exec:java -Dexec.mainClass=com.prabin.swarm_node.SwarmNode
+.\mvnw.cmd compile exec:java
 ```
 
 Or package a fat jar:
@@ -21,14 +24,18 @@ Or package a fat jar:
 java -jar target\swarm-node-0.0.1-SNAPSHOT.jar
 ```
 
-Env knobs (used later by the full peer):
+## Env knobs (scaffold)
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `NETTY_PORT` | `9091` | Peer listen port |
-| `TRACKER_URL` | `http://localhost:8080` | Tracker base URL |
-| `HAS_FILE` | `false` | Seeder vs leecher |
+| `TRACKER_URL` | `http://localhost:8080` | Control-plane base URL |
+| `PEER_ROLE` | `LEECHER` | `LEECHER` / `SEEDER` / `EDGE` |
+| `SITE_ID` | `site-local` | Administrative site label (locality) |
+| `NETWORK_GROUP_ID` | `ng-local` | Finer locality group (replaces hard-coded `/24`) |
 
 ## Status
 
-Scaffold only. Next phases: frame decoder, handshake/bitfield, rarest-first, zero-copy `DefaultFileRegion`, piece verify.
+Scaffold only. No codecs/scheduler/cache yet. Folder stays `swarm-node/` until Phase 0 rename to `peer-agent/`.
+
+Protocol direction: HELLO → HELLO_ACK → BITFIELD → REQUEST/BLOCK/CANCEL (not old HANDSHAKE/PIECE/CHOKE).

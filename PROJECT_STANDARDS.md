@@ -1,253 +1,227 @@
-# Industry-Standard Project Checklist
+# Project Standards Checklist
 
-What a production-grade **P2P Local Asset CDN & Swarm Engine** needs before it is considered “complete” by industry standards. No implementation yet — this is the blueprint of deliverables.
+Aligned with the **Implementation & Research Blueprint** (Aug 2026). Use this as a delivery checklist; the blueprint remains the contract for protocol, manifest, phases, and paper method.
+
+Working name: **SwarmEdge CDN** · Core scheduler research: **LAPS**
 
 ---
 
 ## 1. Product & Requirements
 
-- [ ] Clear problem statement, target users, and non-goals
-- [ ] Measurable SLOs (e.g. WAN offload %, LAN throughput, tracker p99 latency)
-- [ ] Functional requirements: announce, peer discovery, transfer, verify, fallback to origin
-- [ ] Non-functional requirements: throughput, latency, availability, security, scale
-- [ ] Threat model (poisoned chunks, rogue peers, tracker abuse, MITM)
-- [ ] Acceptance criteria per feature (definition of done)
+- [ ] Clear problem statement, users, and **non-goals** (no public DHT, no AI scheduler in v1)
+- [ ] Measured outcomes (not promised 80–90% / 800 Mbps marketing targets)
+- [ ] Functional: signed manifest, announce, ranked discovery, multi-source blocks, cache reuse, progressive fallback
+- [ ] Threat model: poison, forged manifest, spoofed peer, tracker DoS, cache abuse
+- [ ] Acceptance criteria per phase gate
 
 ---
 
 ## 2. Architecture & Design Docs
 
-- [ ] High-level architecture diagram (tracker / seeder / leecher / origin fallback)
-- [ ] Sequence diagrams: announce → discover → handshake → transfer → verify
-- [ ] Data model: manifest schema, peer registry, bitfield, peer scores
-- [ ] Wire protocol specification (message IDs, framing, versioning, compatibility)
-- [ ] Chunking strategy (size selection, last-chunk handling, infoHash rules)
-- [ ] Algorithm notes: rarest-first, tit-for-tat, choke/unchoke intervals
-- [ ] Failure & fallback design (disconnect, poison, NAT, empty swarm)
-- [ ] ADR folder (Architecture Decision Records) for major choices (Netty, Redis TTL, etc.)
+- [ ] Planes documented: trust / control / data / storage
+- [ ] Sequence: verify manifest → announce → discover → HELLO → BITFIELD → REQUEST/BLOCK → verify chunk
+- [ ] Data model: assetId, chunk vs block, siteId/networkGroupId, peer roles
+- [ ] Protocol v1 + golden byte vectors
+- [ ] Manifest v1 JSON Schema + Ed25519 sign/verify
+- [ ] Scheduler notes: rarest-first (B1), locality (B2), LAPS (B3); **no tit-for-tat MVP**
+- [ ] Progressive fallback peer → EDGE → origin (not fixed 5s all-or-nothing)
+- [ ] ADR folder for wire/schema/Redis/scheduler changes
 
 ---
 
-## 3. Repository Structure (industry layout)
+## 3. Repository Structure
 
-Typical monorepo shape (names can vary):
+**Current scaffolds (present):**
 
 ```
 /
 ├── README.md
 ├── PROJECT_STANDARDS.md
-├── docs/                    # architecture, protocol, runbooks
-├── tracker/                 # Spring Boot tracker service
-├── peer/                    # Netty peer agent (seeder/leecher)
-├── common/                  # shared manifest, protocol, crypto helpers
-├── tools/                   # manifest generator, load/bench scripts
-├── deploy/                  # Docker, Compose, K8s, Helm
-├── scripts/                 # local bootstrap, CI helpers
-├── .github/workflows/       # CI/CD
-├── LICENSE
-├── CHANGELOG.md
-└── SECURITY.md
+├── tracker/                 # Spring Boot + Redis control plane
+└── swarm-node/              # Netty peer data plane
 ```
 
-- [ ] Single source of truth for protocol/manifest (shared module)
-- [ ] Clear module boundaries; no circular dependencies
-- [ ] Versioned releases (SemVer)
+**Target monorepo (Phase 0+, not created yet):** `common/`, `protocol/`, `manifest-tool/`, `tracker-service/`, `peer-agent/`, `origin-fixture/`, `benchmark-runner/`, `infra/`, `docs/`, `research/`
+
+- [ ] Single source of truth for protocol/manifest
+- [ ] Control plane has no Netty file-transfer logic
+- [ ] Peer does not treat tracker as content trust
+- [ ] SemVer releases
 
 ---
 
 ## 4. Core Product Components
 
-### Tracker
-- [ ] Announce API with peer identity, IP, port, bitfield
-- [ ] Peer listing with subnet preference (/24 or configurable CIDR)
-- [ ] Redis (or equivalent) presence store with TTL / heartbeat
-- [ ] Auth or at least abuse controls (rate limits, announce size caps)
-- [ ] Health and readiness endpoints
+### Tracker (`tracker/` → tracker-service)
+- [ ] `POST /api/v1/peers/announce` with validation + **observed IP**
+- [ ] `GET /api/v1/assets/{assetId}/peers?limit=20` bounded ranking
+- [ ] Redis hash + **per-field TTL ~45s** (HEXPIRE / Redis ≥ 7.4)
+- [ ] Locality via siteId/networkGroupId (not hard-coded `/24`)
+- [ ] Rate limits, peer tokens (dev/research), Actuator health/metrics
 
-### Peer agent
-- [ ] Dual mode: seeder and leecher (same binary preferred)
-- [ ] Custom binary protocol over TCP (Netty)
-- [ ] Handshake, bitfield, have, request, piece, choke/unchoke
-- [ ] Zero-copy send path for seeding
-- [ ] Disk layout for incomplete/complete assets
-- [ ] Origin HTTP fallback when LAN swarm fails
+### Peer agent (`swarm-node/` → peer-agent)
+- [ ] Roles: LEECHER / SEEDER / EDGE (same binary)
+- [ ] Protocol v1: HELLO, BITFIELD, HAVE, REQUEST, BLOCK, CANCEL, PING/PONG, ERROR
+- [ ] Streaming BLOCK receive; header + FileRegion send where compatible
+- [ ] Chunk verify before cache commit/seed; fail closed
+- [ ] Upload budget + Netty backpressure (not CHOKE/UNCHOKE MVP)
+- [ ] Progressive origin/edge fallback
 
 ### Manifest & publishing
-- [ ] Tooling to chunk a file and emit signed/hashed manifest
-- [ ] Deterministic infoHash derivation
-- [ ] Manifest distribution story (how peers get the JSON)
+- [ ] Fixed chunker + SHA-256 + Ed25519 signed manifest CLI
+- [ ] Deterministic assetId from canonical unsigned fields
+- [ ] Content-addressed chunk store keyed by chunk hash
 
-### Fairness & integrity
-- [ ] SHA-256 verify before commit/seed
-- [ ] Peer scoring / blacklist on hash failure
-- [ ] Tit-for-tat choking to limit free-riding
+### Scheduling & integrity
+- [ ] Stage A: rarest-first (+ endgame later)
+- [ ] Stage B: locality then LAPS weights
+- [ ] SHA-256 full-chunk verify before seed
+- [ ] Reputation/quarantine after failures (never replaces crypto checks)
 
 ---
 
-## 5. Security (non-negotiable for “enterprise”)
+## 5. Security
 
-- [ ] Threat model document
-- [ ] TLS for tracker HTTP (and ideally peer transport or authenticated channel)
-- [ ] Peer identity that is hard to spoof (stable peerId; ideally keyed)
-- [ ] Chunk hash verification always on
-- [ ] Tracker input validation and rate limiting
-- [ ] Secrets never in git (env / secret manager)
-- [ ] Dependency scanning (SCA) and base-image scanning
-- [ ] `SECURITY.md` with vulnerability reporting process
-- [ ] Optional: manifest signature (publisher key) so peers trust the hash list
+- [ ] Threat model doc
+- [ ] Signed manifest + freshness/sequence policy
+- [ ] Peer token / auth hooks; production path toward mTLS
+- [ ] Strict protocol bounds; fuzz malformed frames
+- [ ] Secrets never in git or logs
+- [ ] SCA / image scan
+- [ ] `SECURITY.md`
 
 ---
 
 ## 6. Reliability & Resilience
 
-- [ ] Graceful shutdown (finish/flush in-flight pieces, deregister from tracker)
-- [ ] Retry/backoff for tracker and peer connections
-- [ ] Re-queue incomplete chunks after peer drop
-- [ ] Idempotent announce / safe re-registration
-- [ ] Tracker HA plan (Redis HA, multiple tracker instances)
-- [ ] Clear fallback to origin CDN with timeout budget
-- [ ] Disk full / corrupt cache handling
+- [ ] Graceful drain; requeue blocks; keep verified chunks
+- [ ] Tracker backoff with jitter; sessions continue after discovery
+- [ ] Progressive fallback timers + cancel cross-source work
+- [ ] Crash/resume from cache index
+- [ ] Disk-full / eviction policy
 
 ---
 
-## 7. Performance Engineering
+## 7. Performance
 
-- [ ] Throughput targets documented and measured (LAN GbE)
-- [ ] Zero-copy path validated under load
-- [ ] Connection and piece-pipeline limits (avoid FD / memory blowups)
-- [ ] Backpressure on receive buffers
-- [ ] Benchmark suite (1 seeder → N leechers; multi-peer swarm)
-- [ ] Resource budgets: CPU, RAM, disk IOPS, open sockets
+- [ ] Measured LAN throughput (FileRegion as optimization + buffered fallback)
+- [ ] Outstanding request window (default 8/peer)
+- [ ] Backpressure / outstanding-byte budgets
+- [ ] Benchmark harness with immutable raw runs
+- [ ] Resource budgets documented
 
 ---
 
 ## 8. Observability
 
-- [ ] Structured logging (JSON), correlation IDs per transfer/session
-- [ ] Metrics: announce rate, active peers, bytes LAN vs origin, hash fails, choke events, p99 piece latency
-- [ ] Health/readiness/liveness for tracker and peer
-- [ ] Tracing hooks for announce → first-byte → complete
-- [ ] Dashboards + alert rules (tracker down, offload % drop, poison spike)
+- [ ] Structured logs: runId, peerId, assetId, requestId, sourceType, outcome
+- [ ] Metrics: peer/edge/origin bytes, hash mismatches, ranking latency, completion time
+- [ ] Health endpoints
+- [ ] Paper runs under `research/raw/<runId>/` (append-only)
 
 ---
 
-## 9. Testing Strategy
+## 9. Testing
 
 | Layer | What |
 | --- | --- |
-| Unit | Framing codec, rarest-first, hash verify, bitfield ops, scoring |
-| Integration | Tracker + Redis; peer handshake; announce→discover |
-| Contract | OpenAPI for tracker; protocol fixture vectors for wire messages |
-| E2E / system | Docker Compose multi-node swarm (seeder + N leechers) |
-| Chaos | Kill peer mid-piece, poison chunk, Redis flap, slow network |
-| Performance | Throughput and WAN-bytes-saved regressions in CI (nightly OK) |
-| Security | Negative tests for oversized frames, bad hashes, announce floods |
+| Unit | Manifest, ranking, LAPS, rarest-first, retry math |
+| Protocol | Golden vectors, partial/coalesced frames, bounds |
+| Integration | Tracker+Redis; two-peer transfer; origin fallback |
+| Chaos | Peer kill, Redis restart, churn, netem |
+| Security negative | Bad signature, stale sequence, corrupt block, wrong token |
+| Paper | B0–B3 configs, repetitions, validation.json |
 
-- [ ] Test data fixtures (small deterministic files + known manifests)
-- [ ] CI gates: unit + integration must pass on every PR
-
----
-
-## 10. CI/CD & Quality Gates
-
-- [ ] Build + test on PR
-- [ ] Lint / static analysis / format check
-- [ ] Dependency vulnerability scan
-- [ ] Container image build + scan
-- [ ] Artifact publishing (jar/image) with immutable tags
-- [ ] Changelog / release notes automation
-- [ ] Branch protection: reviews + green CI before merge
+- [ ] `./mvnw verify` on the pinned LTS JDK (25 here; 21 also blueprint-valid)
+- [ ] CI on PRs once modules exist
 
 ---
 
-## 11. Configuration & Environments
+## 10. CI/CD
 
-- [ ] 12-factor config (env vars / config files; no hardcoding)
-- [ ] Separate `local` / `staging` / `prod` profiles
-- [ ] Documented knobs: chunk size, ports, tracker URL, TTLs, choke intervals, fallback timeout
-- [ ] Sensible defaults for local demo
-- [ ] Feature flags if rolling out risky protocol changes
-
----
-
-## 12. API & Protocol Contracts
-
-- [ ] OpenAPI (or equivalent) for tracker REST
-- [ ] Versioned protocol (`protocolVersion` in handshake)
-- [ ] Manifest schema version + validation
-- [ ] Backward-compatibility policy for wire format changes
-- [ ] Error codes / failure semantics documented
+- [ ] PR: compile + unit + protocol goldens + style
+- [ ] Testcontainers Redis/tracker/two-peer when ready
+- [ ] Image build; secret/log scan
+- [ ] Nightly bench smoke (not every PR if heavy)
 
 ---
 
-## 13. Packaging, Deploy & Ops
+## 11. Configuration
 
-- [ ] Dockerfile(s) with non-root user, small base image
-- [ ] `docker-compose` for local swarm (Redis + tracker + seeder + leechers)
-- [ ] Production deploy story (VM / K8s / systemd) even if Compose-first
-- [ ] Runbooks: deploy, rollback, scale tracker, rotate secrets, purge bad peer
-- [ ] Capacity planning notes (peers per tracker, Redis memory)
-- [ ] Backup/restore for any durable state (if manifests live in a DB)
+- [ ] Env/config for ports, TTLs, chunk/block sizes, LAPS weights, fallback timers
+- [ ] Documented defaults; no hidden globals
+- [ ] Demo / test / paper Compose profiles later
 
 ---
 
-## 14. Documentation (ship-with-product)
+## 12. Contracts
 
-- [ ] README: what it is, quick start, status
-- [ ] Architecture guide
-- [ ] Protocol & manifest reference
-- [ ] Operator guide (ports, firewall, Redis, TLS)
-- [ ] Developer guide (build, test, add message type)
-- [ ] SECURITY.md, CONTRIBUTING.md, CODE_OF_CONDUCT (if open source)
-- [ ] LICENSE chosen and applied
-- [ ] CHANGELOG.md
+- [ ] OpenAPI for tracker
+- [ ] Protocol version in HELLO; golden vectors are AGENT-GATE
+- [ ] Manifest schema version + canonical serialization
+- [ ] ADR required to change wire/schema/Redis/metric names
 
 ---
 
-## 15. Compliance, Legal & Governance
+## 13. Packaging & Ops
 
-- [ ] Open-source license compatibility for Netty/Spring/Redis clients
-- [ ] No accidental secret commits (pre-commit / git-secrets / gitleaks)
-- [ ] Data handling note: peer IPs in tracker = PII-ish; retention/TTL policy
-- [ ] Code owners / review rules for critical paths (crypto, protocol)
+- [ ] Dockerfiles; Compose demo (≥8 peers + Redis + tracker + origin + EDGE)
+- [ ] One-command demo script
+- [ ] Runbooks; capacity notes
 
 ---
 
-## 16. Success Metrics (prove it works)
+## 14. Documentation
 
-Track these end-to-end; without them the project is demos, not production:
+- [ ] README architecture + honest status
+- [ ] `docs/protocol-v1.md`, `manifest-v1.md`, threat model, `STATUS.md`
+- [ ] Experiment method + reproducibility notes
+- [ ] LICENSE, CHANGELOG, SECURITY
 
-| Metric | Why it matters |
+---
+
+## 15. Governance
+
+- [ ] Dependency license check
+- [ ] No secret commits
+- [ ] Peer IP retention/TTL policy
+- [ ] Critical-path review for crypto/protocol
+
+---
+
+## 16. Success Metrics (measure only)
+
+| Metric | Why |
 | --- | --- |
-| % bytes from LAN vs origin | Core value (cost / WAN offload) |
-| Sustained Mbps on LAN | Performance claim |
-| Hash failure rate | Integrity / poison detection |
-| Time-to-first-byte / time-to-complete | User experience |
-| Tracker availability & announce p99 | Control-plane health |
-| Swarm size & subnet hit rate | Discovery quality |
+| Origin offload ratio + peak origin Mbps | Cost / flash-crowd |
+| Completion time p50/p95 | Scheduler quality |
+| Peer/edge/origin byte share | Where capacity came from |
+| Hash/signature failure count | Must stay fail-closed (accepts = 0) |
+| Tracker ranking latency / active records | Control-plane scale |
+| Cache hit / reuse bytes | Warm-cache (B4+) |
 
 ---
 
-## Suggested delivery phases (still no code — ordering only)
+## Delivery phases (blueprint order)
 
-1. **Foundation** — repo layout, docs skeleton, manifest schema, protocol v1 freeze  
-2. **Tracker MVP** — announce + peers + Redis TTL + OpenAPI + health  
-3. **Peer MVP** — handshake, request/piece, hash verify, single-seeder download  
-4. **Swarm quality** — rarest-first, have, multi-peer, tit-for-tat  
-5. **Hardening** — fallback, blacklist, rate limits, TLS, observability  
-6. **Production pack** — Compose/K8s, CI, benches, runbooks, release v1.0  
+0. Architecture freeze (contracts + skeleton)  
+1. Local content engine (chunk/sign/store)  
+2. Origin baseline B0  
+3. Tracker / Redis / ranking  
+4. Two-peer Netty protocol  
+5. Basic swarm B1 (rarest-first)  
+6. Locality + LAPS (B2/B3)  
+7. Persistent cache B4  
+8. EDGE + progressive fallback  
+9. Security hardening  
+10. Experiment harness  
+11. Optional FastCDC B5  
+12. Paper + portfolio release  
+
+**Critical path for a strong resume demo:** phases 0–6.
 
 ---
 
-## Definition of a “perfect” v1.0
+## Definition of done (v1.0)
 
-A v1.0 is industry-ready when:
-
-1. Specs and ADRs match running behavior  
-2. Multi-node E2E test proves LAN transfer + hash integrity + origin fallback  
-3. Security basics (verify-always, abuse limits, secrets hygiene, vulnerability scans) are in place  
-4. Metrics prove WAN offload and throughput claims  
-5. Ops can deploy, observe, and recover from the failure matrix without tribal knowledge  
-6. Releases are versioned, changelogged, and reproducible  
-
-Until those exist, treat the system as a prototype — even if demos look fast.
+Matches blueprint §24: clean Java 21 build, 8-peer demo, cold+warm runs, selectable B1/B2/B3, fail-closed security suite, reproducible B0–B3 artifacts, honest README limitations, tagged release.

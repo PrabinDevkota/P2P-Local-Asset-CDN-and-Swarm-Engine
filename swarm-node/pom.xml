@@ -8,13 +8,14 @@
     <artifactId>swarm-node</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <name>swarm-node</name>
-    <description>Netty P2P peer (seeder/leecher) for P2P Local Asset CDN</description>
+    <description>Data-plane peer-agent scaffold (Netty) for SwarmEdge CDN</description>
 
     <properties>
+        <!-- Blueprint prefers 21; 25 is also LTS (Aug 2026) and installed on this machine. Netty 4.2.x data plane. -->
         <java.version>25</java.version>
         <maven.compiler.release>${java.version}</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <netty.version>4.1.119.Final</netty.version>
+        <netty.version>4.2.2.Final</netty.version>
         <jackson.version>2.18.3</jackson.version>
         <slf4j.version>2.0.17</slf4j.version>
         <logback.version>1.5.18</logback.version>

@@ -12,9 +12,10 @@
 	<artifactId>tracker</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
 	<name>tracker</name>
-	<description>Spring Boot + Redis swarm tracker for P2P Local Asset CDN</description>
+	<description>Control-plane tracker-service scaffold (Spring Boot + Redis) for SwarmEdge CDN</description>
 	<url>https://github.com/PrabinDevkota/P2P-Local-Asset-CDN-and-Swarm-Engine</url>
 	<properties>
+		<!-- Blueprint prefers 21; 25 is also LTS (Aug 2026) and installed on this machine -->
 		<java.version>25</java.version>
 	</properties>
 	<dependencies>
