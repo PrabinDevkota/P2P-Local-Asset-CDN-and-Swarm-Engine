@@ -35,6 +35,6 @@ public final class SwarmNode {
                 siteId,
                 networkGroupId
         );
-        log.info("Next gate: Phase 0 contracts, then Phase 4 Netty HELLO/BITFIELD/REQUEST/BLOCK");
+        log.info("Phase 0 scaffold; Netty HELLO session is Phase 4");
     }
 }
