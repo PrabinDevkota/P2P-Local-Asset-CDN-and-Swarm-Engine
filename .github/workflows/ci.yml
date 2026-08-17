@@ -16,4 +16,6 @@ jobs:
           java-version: "21"
           cache: maven
       - name: Verify
-        run: ./mvnw -B verify
+        run: |
+          chmod +x mvnw
+          ./mvnw -B verify
