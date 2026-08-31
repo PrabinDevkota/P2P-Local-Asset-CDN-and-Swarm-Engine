@@ -10,9 +10,19 @@ Blueprint source of truth: `P2P_Local_Asset_CDN_Implementation_and_Research_Blue
 - [x] P0-04 Threat model + ADR-001..004
 - [x] P0-05 CI (Java 21 Temurin, `./mvnw -B verify`)
 
+## Phase 1 — Local content engine
+
+- [x] FileChunker (fixed-size SHA-256 catalog)
+- [x] ChunkStore (content-addressed, fail-closed `putVerified`)
+- [x] AssetIngestor / AssetMaterializer (file ↔ warehouse round-trip)
+- [x] Unsigned `ReleaseManifest` factory
+- [x] Ed25519 sign + verify over canonical unsigned JSON
+- [x] CLI: `gen-key`, `sign`, `verify`
+
+Not in this phase (later): SQLite chunk index, Netty transfer, tracker APIs.
+
 ## Not started
 
-- Phase 1 local content engine (chunker, sign/verify CLI, chunk store)
 - Phase 2 origin baseline
 - Phase 3 tracker announce/ranking
 - Phase 4 Netty two-peer session
