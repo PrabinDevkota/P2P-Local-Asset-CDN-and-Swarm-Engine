@@ -140,7 +140,7 @@ Contracts: [docs/manifest-v1.md](docs/manifest-v1.md), [docs/protocol-v1.md](doc
 
 ## Status
 
-**Phase 0 (architecture freeze) is implemented.** Next is Phase 1: chunker, sign/verify CLI, chunk store. Do not start Netty peer sessions until `./mvnw verify` stays green.
+**Phase 0 is frozen. Phase 1 local content engine (chunk, store, sign/verify CLI) is implemented.** Next is Phase 2 origin baseline. Do not start Netty peer sessions until `./mvnw verify` stays green.
 
 Industry checklist: [PROJECT_STANDARDS.md](./PROJECT_STANDARDS.md)
 
