@@ -35,4 +35,6 @@ Not in this phase (later): SQLite chunk index, Netty transfer, tracker APIs.
 - Phase 4 Netty two-peer session
 - Phases 5–12 as in the blueprint
 
-Do not begin Netty transfer sessions until this file shows Phase 0 complete and `./mvnw verify` is green.
+Do not begin Netty transfer sessions until Phase 2 origin can serve ranged bytes, Phase 3 can return a candidate list, and `./mvnw verify` is green.
+
+Peers must call `ManifestVerifier` with a trusted public key. `ManifestJson.parse` only checks JSON shape.
