@@ -10,6 +10,7 @@ import java.security.MessageDigest;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class FileChunkerTest {
 
@@ -50,6 +51,13 @@ class FileChunkerTest {
         assertThat(chunks.get(0)).isEqualTo(new ChunkEntry(0, 0, 4, sha256Hex(data, 0, 4)));
         assertThat(chunks.get(1)).isEqualTo(new ChunkEntry(1, 4, 4, sha256Hex(data, 4, 4)));
         assertThat(chunks.get(2)).isEqualTo(new ChunkEntry(2, 8, 2, sha256Hex(data, 8, 2)));
+    }
+
+    @Test
+    void rejectsChunkSizeTooLargeForByteArray() {
+        assertThatThrownBy(() -> new FileChunker(Integer.MAX_VALUE + 1L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("byte array");
     }
 
     private static String sha256Hex(byte[] data) throws Exception {
