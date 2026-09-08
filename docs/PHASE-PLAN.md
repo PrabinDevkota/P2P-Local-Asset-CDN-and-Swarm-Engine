@@ -17,7 +17,7 @@ Fake company server. Peers later fall back here. No P2P yet.
 | --- | --- | --- |
 | P2-01 | `OriginHttpServer.java` | JDK HTTP server; `GET /files/{name}` from a root dir; reject `..` paths |
 | P2-02 | `OriginHttpServerTest.java` | 200 whole file, 404 missing, path-traversal rejected |
-| P2-03 | range support in the same server | `Range: bytes=start-end` → 206 (needed for later block fallback) |
+| P2-03 | range support in `OriginHttpServer` | `Range: bytes=start-end` → 206; stream from disk |
 | P2-04 | `GET /manifests/{name}` | Serve a signed JSON already produced by `manifest-tool` |
 | P2-05 | STATUS/README | Mark Phase 2 complete |
 
