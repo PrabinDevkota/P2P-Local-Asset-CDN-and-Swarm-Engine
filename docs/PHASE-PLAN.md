@@ -22,6 +22,8 @@ Fake company server. Peers later fall back here. No P2P yet.
 | P2-05 | STATUS/README | Mark Phase 2 complete |
 
 Keep this module free of Spring. Origin is a dumb byte source; trust still comes from the signed manifest.
+Serving a `.json` file later is **distribution only** — callers must still run `ManifestVerifier`.
+P2-03 must **stream** from disk (no `readAllBytes`) so a 10 GB asset cannot blow RAM.
 
 ## Phase 3 — Tracker announce / ranking (`tracker-service/`)
 
