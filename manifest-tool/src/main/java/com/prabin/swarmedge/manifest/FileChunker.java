@@ -28,6 +28,9 @@ public final class FileChunker {
         if (chunkSize <= 0) {
             throw new IllegalArgumentException("chunkSize must be positive");
         }
+        if (chunkSize > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("chunkSize must fit in a byte array");
+        }
         this.chunkSize = chunkSize;
     }
 
