@@ -13,6 +13,7 @@ import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 
 /**
@@ -32,18 +33,26 @@ public final class AssetMaterializer {
         Objects.requireNonNull(chunks, "chunks");
         Objects.requireNonNull(destination, "destination");
         Path parent = destination.getParent();
-        if (parent != null) {
-            Files.createDirectories(parent);
+        if (parent == null) {
+            parent = destination.toAbsolutePath().getParent();
         }
-        Path temp = Files.createTempFile(parent != null ? parent : destination.toAbsolutePath().getParent(),
-                "materialize-", ".tmp");
+        if (parent == null) {
+            parent = Path.of(".");
+        }
+        Files.createDirectories(parent);
+        Path temp = Files.createTempFile(parent, "materialize-", ".tmp");
         try {
+            long fileSize = 0;
+            for (ChunkEntry chunk : chunks) {
+                fileSize = Math.max(fileSize, Math.addExact(chunk.offset(), chunk.length()));
+            }
             try (FileChannel channel = FileChannel.open(temp,
                     StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
                 for (ChunkEntry chunk : chunks) {
                     byte[] data = readVerified(chunk);
                     channel.write(ByteBuffer.wrap(data), chunk.offset());
                 }
+                channel.truncate(fileSize);
             }
             try {
                 Files.move(temp, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
@@ -63,8 +72,9 @@ public final class AssetMaterializer {
             throw new IllegalArgumentException("chunk length mismatch: expected " + chunk.length()
                     + " but was " + data.length);
         }
+        String expected = chunk.sha256().trim().toLowerCase(Locale.ROOT);
         String actual = Hex.toLowerHex(sha256(data));
-        if (!chunk.sha256().equals(actual)) {
+        if (!expected.equals(actual)) {
             throw new IllegalArgumentException("chunk hash mismatch: expected " + chunk.sha256()
                     + " but was " + actual);
         }
