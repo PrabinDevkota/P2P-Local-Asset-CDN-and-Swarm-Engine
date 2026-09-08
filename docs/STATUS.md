@@ -25,7 +25,7 @@ Not in this phase (later): SQLite chunk index, Netty transfer, tracker APIs.
 
 - [x] P2-01 `OriginHttpServer` (`GET /files/{name}`, path traversal rejected)
 - [x] P2-02 Tests: 200 / 404 / traversal
-- [ ] P2-03 HTTP Range (206)
+- [x] P2-03 HTTP Range (206) + stream from disk
 - [ ] P2-04 Serve signed manifest JSON
 - [ ] P2-05 STATUS complete
 
