@@ -7,14 +7,18 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.nio.channels.Channels;
+import java.nio.channels.FileChannel;
+import java.nio.channels.WritableByteChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Test-only origin: serve files from a local directory over HTTP.
+ * Test-only origin: stream files from a local directory over HTTP.
  * Trust is still the signed manifest; this server is an untrusted byte source.
  */
 public final class OriginHttpServer implements AutoCloseable {
@@ -56,27 +60,47 @@ public final class OriginHttpServer implements AutoCloseable {
     }
 
     private void handleFiles(HttpExchange exchange) throws IOException {
+        boolean headersSent = false;
         try {
             if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
-                send(exchange, 405, new byte[0]);
+                sendEmpty(exchange, 405);
                 return;
             }
             String path = exchange.getRequestURI().getPath();
             String prefix = "/files/";
             if (path == null || !path.startsWith(prefix) || path.length() == prefix.length()) {
-                send(exchange, 404, new byte[0]);
+                sendEmpty(exchange, 404);
                 return;
             }
             Path file = resolveSafe(path.substring(prefix.length()));
             if (file == null || !Files.isRegularFile(file)) {
-                send(exchange, 404, new byte[0]);
+                sendEmpty(exchange, 404);
                 return;
             }
-            byte[] body = Files.readAllBytes(file);
+            long size = Files.size(file);
+            String rangeHeader = exchange.getRequestHeaders().getFirst("Range");
+            ByteSpan span = rangeHeader == null || rangeHeader.isBlank()
+                    ? ByteSpan.full(size)
+                    : ByteSpan.parse(rangeHeader, size);
+            if (span == null) {
+                exchange.getResponseHeaders().set("Content-Range", "bytes */" + size);
+                sendEmpty(exchange, 416);
+                return;
+            }
+            exchange.getResponseHeaders().set("Accept-Ranges", "bytes");
             exchange.getResponseHeaders().set("Content-Type", "application/octet-stream");
-            send(exchange, 200, body);
+            int status = span.partial() ? 206 : 200;
+            if (span.partial()) {
+                exchange.getResponseHeaders().set(
+                        "Content-Range", "bytes " + span.start() + "-" + span.end() + "/" + size);
+            }
+            exchange.sendResponseHeaders(status, span.length());
+            headersSent = true;
+            copy(file, span, exchange.getResponseBody());
         } catch (IOException e) {
-            send(exchange, 500, new byte[0]);
+            if (!headersSent) {
+                sendEmpty(exchange, 500);
+            }
         }
     }
 
@@ -91,10 +115,75 @@ public final class OriginHttpServer implements AutoCloseable {
         return resolved;
     }
 
-    private static void send(HttpExchange exchange, int code, byte[] body) throws IOException {
-        exchange.sendResponseHeaders(code, body.length);
-        try (OutputStream out = exchange.getResponseBody()) {
-            out.write(body);
+    private static void copy(Path file, ByteSpan span, OutputStream out) throws IOException {
+        try (FileChannel in = FileChannel.open(file, StandardOpenOption.READ);
+             OutputStream body = out) {
+            if (span.length() == 0) {
+                return;
+            }
+            WritableByteChannel dest = Channels.newChannel(body);
+            long remaining = span.length();
+            long pos = span.start();
+            while (remaining > 0) {
+                long n = in.transferTo(pos, remaining, dest);
+                if (n <= 0) {
+                    throw new IOException("short transfer at offset " + pos);
+                }
+                pos += n;
+                remaining -= n;
+            }
+        }
+    }
+
+    private static void sendEmpty(HttpExchange exchange, int code) throws IOException {
+        exchange.sendResponseHeaders(code, -1);
+        exchange.close();
+    }
+
+    /** Inclusive start/end; {@code parse} returns null when Range is malformed or unsatisfiable. */
+    record ByteSpan(long start, long end, long length, boolean partial) {
+        static ByteSpan full(long size) {
+            if (size == 0) {
+                return new ByteSpan(0, -1, 0, false);
+            }
+            return new ByteSpan(0, size - 1, size, false);
+        }
+
+        static ByteSpan parse(String header, long size) {
+            if (size <= 0 || !header.regionMatches(true, 0, "bytes=", 0, 6)) {
+                return null;
+            }
+            String spec = header.substring(6).trim();
+            if (spec.isEmpty() || spec.contains(",")) {
+                return null;
+            }
+            try {
+                if (spec.charAt(0) == '-') {
+                    long suffix = Long.parseLong(spec.substring(1));
+                    if (suffix <= 0) {
+                        return null;
+                    }
+                    long start = Math.max(0, size - suffix);
+                    return new ByteSpan(start, size - 1, size - start, true);
+                }
+                int dash = spec.indexOf('-');
+                if (dash <= 0) {
+                    return null;
+                }
+                long start = Long.parseLong(spec.substring(0, dash));
+                if (start < 0 || start >= size) {
+                    return null;
+                }
+                String endPart = spec.substring(dash + 1);
+                long end = endPart.isEmpty() ? size - 1 : Long.parseLong(endPart);
+                if (end < start) {
+                    return null;
+                }
+                end = Math.min(end, size - 1);
+                return new ByteSpan(start, end, end - start + 1, true);
+            } catch (NumberFormatException e) {
+                return null;
+            }
         }
     }
 }
