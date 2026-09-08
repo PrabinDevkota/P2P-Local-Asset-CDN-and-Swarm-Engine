@@ -21,9 +21,16 @@ Blueprint source of truth: `P2P_Local_Asset_CDN_Implementation_and_Research_Blue
 
 Not in this phase (later): SQLite chunk index, Netty transfer, tracker APIs.
 
+## Phase 2 — Origin baseline
+
+- [x] P2-01 `OriginHttpServer` (`GET /files/{name}`, path traversal rejected)
+- [x] P2-02 Tests: 200 / 404 / traversal
+- [ ] P2-03 HTTP Range (206)
+- [ ] P2-04 Serve signed manifest JSON
+- [ ] P2-05 STATUS complete
+
 ## Not started
 
-- Phase 2 origin baseline
 - Phase 3 tracker announce/ranking
 - Phase 4 Netty two-peer session
 - Phases 5–12 as in the blueprint
