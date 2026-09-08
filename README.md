@@ -140,7 +140,8 @@ Contracts: [docs/manifest-v1.md](docs/manifest-v1.md), [docs/protocol-v1.md](doc
 
 ## Status
 
-**Phase 0 is frozen. Phase 1 local content engine (chunk, store, sign/verify CLI) is implemented.** Next is Phase 2 origin baseline. Do not start Netty peer sessions until `./mvnw verify` stays green.
+**Phase 0 is frozen. Phase 1 local content engine is implemented. Phase 2 origin HTTP file serving is in progress** (Range and manifest URLs next). Do not start Netty until origin can serve ranged bytes, the tracker can return candidates, and `./mvnw verify` stays green. `ManifestJson.parse` is not signature verify.
+
 
 Industry checklist: [PROJECT_STANDARDS.md](./PROJECT_STANDARDS.md)
 
