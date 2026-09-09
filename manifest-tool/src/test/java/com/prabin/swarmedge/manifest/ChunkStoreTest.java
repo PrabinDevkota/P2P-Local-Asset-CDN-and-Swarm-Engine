@@ -60,6 +60,22 @@ class ChunkStoreTest {
         assertThat(Files.readAllBytes(first)).containsExactly(data);
     }
 
+    @Test
+    void rejectsCorruptExistingChunkOnPut() throws Exception {
+        byte[] data = {1, 2, 3, 4};
+        String hash = sha256Hex(data);
+        ChunkStore store = new ChunkStore(tempDir);
+        Path saved = store.putVerified(hash, data);
+        Files.write(saved, new byte[] {9, 9, 9, 9});
+
+        assertThatThrownBy(() -> store.putVerified(hash, data))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("corrupt");
+        assertThatThrownBy(() -> store.read(hash))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("corrupt");
+    }
+
     private static String sha256Hex(byte[] data) throws Exception {
         return Hex.toLowerHex(MessageDigest.getInstance("SHA-256").digest(data));
     }
