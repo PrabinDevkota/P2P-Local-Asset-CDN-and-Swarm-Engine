@@ -54,6 +54,11 @@ class FileChunkerTest {
     }
 
     @Test
+    void exposesConfiguredChunkSize() {
+        assertThat(new FileChunker(4).chunkSize()).isEqualTo(4);
+    }
+
+    @Test
     void rejectsChunkSizeTooLargeForByteArray() {
         assertThatThrownBy(() -> new FileChunker(Integer.MAX_VALUE + 1L))
                 .isInstanceOf(IllegalArgumentException.class)
