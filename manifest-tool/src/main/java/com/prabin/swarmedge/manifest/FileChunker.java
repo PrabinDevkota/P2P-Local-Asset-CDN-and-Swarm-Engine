@@ -14,11 +14,11 @@ import java.util.List;
 
 /**
  * Splits a file into fixed-size integrity chunks and SHA-256 hashes each one.
- * Does not write chunk files yet — that is the later ChunkStore.
+ * Catalog only — {@link ChunkStore} / {@link AssetIngestor} write bytes.
  */
 public final class FileChunker {
 
-    private final long chunkSize;
+    private final int chunkSize;
 
     public FileChunker() {
         this(Defaults.CHUNK_SIZE_BYTES);
@@ -31,7 +31,11 @@ public final class FileChunker {
         if (chunkSize > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("chunkSize must fit in a byte array");
         }
-        this.chunkSize = chunkSize;
+        this.chunkSize = (int) chunkSize;
+    }
+
+    public int chunkSize() {
+        return chunkSize;
     }
 
     public List<ChunkEntry> chunk(Path file) throws IOException {
@@ -43,13 +47,12 @@ public final class FileChunker {
             }
 
             MessageDigest sha256 = sha256();
-            ByteBuffer buffer = ByteBuffer.allocateDirect((int) Math.min(chunkSize, Integer.MAX_VALUE));
+            ByteBuffer buffer = ByteBuffer.allocateDirect(chunkSize);
             long offset = 0;
             int index = 0;
 
             while (offset < fileSize) {
-                long remaining = fileSize - offset;
-                int length = (int) Math.min(chunkSize, remaining);
+                int length = (int) Math.min(chunkSize, fileSize - offset);
                 buffer.clear();
                 buffer.limit(length);
 
