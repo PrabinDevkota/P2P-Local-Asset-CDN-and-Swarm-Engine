@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
 import java.nio.channels.WritableByteChannel;
@@ -108,7 +109,11 @@ public final class OriginHttpServer implements AutoCloseable {
         if (name.isBlank() || name.contains("\\") || name.indexOf('\0') >= 0) {
             return null;
         }
-        Path resolved = root.resolve(name).normalize();
+        Path relative = Path.of(name);
+        if (relative.isAbsolute()) {
+            return null;
+        }
+        Path resolved = root.resolve(relative).normalize();
         if (!resolved.startsWith(root) || resolved.equals(root)) {
             return null;
         }
@@ -124,13 +129,29 @@ public final class OriginHttpServer implements AutoCloseable {
             WritableByteChannel dest = Channels.newChannel(body);
             long remaining = span.length();
             long pos = span.start();
+            ByteBuffer fallback = null;
             while (remaining > 0) {
                 long n = in.transferTo(pos, remaining, dest);
-                if (n <= 0) {
+                if (n > 0) {
+                    pos += n;
+                    remaining -= n;
+                    continue;
+                }
+                if (fallback == null) {
+                    fallback = ByteBuffer.allocate((int) Math.min(remaining, 64 * 1024));
+                }
+                fallback.clear();
+                if (fallback.capacity() > remaining) {
+                    fallback.limit((int) remaining);
+                }
+                int read = in.read(fallback, pos);
+                if (read <= 0) {
                     throw new IOException("short transfer at offset " + pos);
                 }
-                pos += n;
-                remaining -= n;
+                fallback.flip();
+                body.write(fallback.array(), fallback.position(), fallback.remaining());
+                pos += read;
+                remaining -= read;
             }
         }
     }
