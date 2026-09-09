@@ -41,7 +41,12 @@ public final class ChunkStore {
         if (!Files.isRegularFile(path)) {
             return Optional.empty();
         }
-        return Optional.of(Files.readAllBytes(path));
+        byte[] data = Files.readAllBytes(path);
+        String expected = normalizeHash(sha256Hex);
+        if (!expected.equals(Hex.toLowerHex(sha256(data)))) {
+            throw new IllegalArgumentException("stored chunk is corrupt: " + expected);
+        }
+        return Optional.of(data);
     }
 
     /**
@@ -58,6 +63,10 @@ public final class ChunkStore {
 
         Path target = pathFor(expected);
         if (Files.isRegularFile(target)) {
+            byte[] existing = Files.readAllBytes(target);
+            if (!expected.equals(Hex.toLowerHex(sha256(existing)))) {
+                throw new IllegalArgumentException("stored chunk is corrupt: " + expected);
+            }
             return target;
         }
         Files.createDirectories(target.getParent());
@@ -77,8 +86,8 @@ public final class ChunkStore {
     }
 
     private static String normalizeHash(String sha256Hex) {
-        Hex.fromHex(sha256Hex);
         String hash = sha256Hex.trim().toLowerCase(Locale.ROOT);
+        Hex.fromHex(hash);
         if (hash.length() != 64) {
             throw new IllegalArgumentException("sha256 must be 64 hex characters");
         }
