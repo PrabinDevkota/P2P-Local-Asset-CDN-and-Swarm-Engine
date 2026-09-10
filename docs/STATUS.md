@@ -26,8 +26,10 @@ Not in this phase (later): SQLite chunk index, Netty transfer, tracker APIs.
 - [x] P2-01 `OriginHttpServer` (`GET /files/{name}`, path traversal rejected)
 - [x] P2-02 Tests: 200 / 404 / traversal
 - [x] P2-03 HTTP Range (206) + stream from disk
-- [ ] P2-04 Serve signed manifest JSON
-- [ ] P2-05 STATUS complete
+- [x] P2-04 Serve signed manifest JSON (`GET /manifests/{name}`, copy only)
+- [x] P2-05 STATUS complete
+
+Origin HTTP copies bytes only. Callers must still verify a downloaded manifest with a trusted public key.
 
 ## Not started
 
@@ -35,6 +37,6 @@ Not in this phase (later): SQLite chunk index, Netty transfer, tracker APIs.
 - Phase 4 Netty two-peer session
 - Phases 5–12 as in the blueprint
 
-Do not begin Netty transfer sessions until Phase 2 origin can serve ranged bytes, Phase 3 can return a candidate list, and `./mvnw verify` is green.
+Do not begin Netty transfer sessions until Phase 3 can return a candidate list and `./mvnw verify` is green.
 
 Peers must call `ManifestVerifier` with a trusted public key. `ManifestJson.parse` only checks JSON shape.
