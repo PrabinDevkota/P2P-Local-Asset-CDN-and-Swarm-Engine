@@ -12,14 +12,16 @@ import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
 import java.nio.channels.WritableByteChannel;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Test-only origin: stream files from a local directory over HTTP.
+ * Test-only origin: stream files and signed-manifest JSON from a local directory.
  * Trust is still the signed manifest; this server is an untrusted byte source.
  */
 public final class OriginHttpServer implements AutoCloseable {
@@ -41,7 +43,10 @@ public final class OriginHttpServer implements AutoCloseable {
             return t;
         });
         this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
-        this.server.createContext("/files", this::handleFiles);
+        this.server.createContext("/files",
+                exchange -> handleGet(exchange, "/files/", "application/octet-stream", false));
+        this.server.createContext("/manifests",
+                exchange -> handleGet(exchange, "/manifests/", "application/json", true));
         this.server.setExecutor(executor);
         this.server.start();
     }
@@ -60,7 +65,12 @@ public final class OriginHttpServer implements AutoCloseable {
         executor.shutdownNow();
     }
 
-    private void handleFiles(HttpExchange exchange) throws IOException {
+    /**
+     * Stream a file under {@code root}. Manifest URLs copy JSON bytes only —
+     * this server never parses or verifies a signature.
+     */
+    private void handleGet(HttpExchange exchange, String prefix, String contentType, boolean jsonName)
+            throws IOException {
         boolean headersSent = false;
         try {
             if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
@@ -68,13 +78,17 @@ public final class OriginHttpServer implements AutoCloseable {
                 return;
             }
             String path = exchange.getRequestURI().getPath();
-            String prefix = "/files/";
             if (path == null || !path.startsWith(prefix) || path.length() == prefix.length()) {
                 sendEmpty(exchange, 404);
                 return;
             }
-            Path file = resolveSafe(path.substring(prefix.length()));
-            if (file == null || !Files.isRegularFile(file)) {
+            String name = path.substring(prefix.length());
+            if (jsonName && !name.toLowerCase(Locale.ROOT).endsWith(".json")) {
+                sendEmpty(exchange, 404);
+                return;
+            }
+            Path file = resolveSafe(name);
+            if (file == null || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
                 sendEmpty(exchange, 404);
                 return;
             }
@@ -89,7 +103,7 @@ public final class OriginHttpServer implements AutoCloseable {
                 return;
             }
             exchange.getResponseHeaders().set("Accept-Ranges", "bytes");
-            exchange.getResponseHeaders().set("Content-Type", "application/octet-stream");
+            exchange.getResponseHeaders().set("Content-Type", contentType);
             int status = span.partial() ? 206 : 200;
             if (span.partial()) {
                 exchange.getResponseHeaders().set(
