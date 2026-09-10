@@ -1,6 +1,6 @@
 # Next-phase plan (file-by-file)
 
-Phase 0 contracts and Phase 1 local content engine are done. `./mvnw verify` is the gate. Do not start Netty transfer (Phase 4) until Phase 2 origin can serve a file and Phase 3 tracker can return a candidate list.
+Phase 0 contracts and Phase 1 local content engine are done. Phase 2 origin baseline is done. `./mvnw verify` is the gate. Do not start Netty transfer (Phase 4) until Phase 3 tracker can return a candidate list.
 
 ## Done
 
@@ -8,8 +8,9 @@ Phase 0 contracts and Phase 1 local content engine are done. `./mvnw verify` is 
 | --- | --- |
 | 0 | Maven modules, manifest schema, protocol codecs, ADRs, CI |
 | 1 | Chunk → store → signed manifest → verify → rebuild; CLI `gen-key` / `sign` / `verify` |
+| 2 | Origin HTTP: `GET /files/{name}`, Range 206 stream, `GET /manifests/{name}` copy only |
 
-## Phase 2 — Origin baseline (`origin-fixture/`)
+## Phase 2 — Origin baseline (`origin-fixture/`) — done
 
 Fake company server. Peers later fall back here. No P2P yet.
 
