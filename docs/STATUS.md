@@ -31,12 +31,20 @@ Not in this phase (later): SQLite chunk index, Netty transfer, tracker APIs.
 
 Origin HTTP copies bytes only. Callers must still verify a downloaded manifest with a trusted public key.
 
+## Phase 3 — Tracker announce / ranking
+
+- [x] P3-01 Announce DTO + validation (`assetId`, `peerId`, port, `siteId`, `networkGroupId`, bitfield)
+- [x] P3-02 `POST /api/v1/peers/announce` — observed IP, Redis HASH + HEXPIRE 45s
+- [x] P3-03 `GET /api/v1/assets/{assetId}/peers?limit=20` — exclude self, rank site then network group
+- [x] P3-04 Tests (fail-closed payloads; Redis HEXPIRE when Docker is available)
+
+Tracker never stores file bytes and is not a trust root.
+
 ## Not started
 
-- Phase 3 tracker announce/ranking
 - Phase 4 Netty two-peer session
 - Phases 5–12 as in the blueprint
 
-Do not begin Netty transfer sessions until Phase 3 can return a candidate list and `./mvnw verify` is green.
+Do not begin Netty transfer sessions until `./mvnw verify` is green.
 
 Peers must call `ManifestVerifier` with a trusted public key. `ManifestJson.parse` only checks JSON shape.
