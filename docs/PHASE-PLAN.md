@@ -1,6 +1,6 @@
 # Next-phase plan (file-by-file)
 
-Phase 0 contracts and Phase 1 local content engine are done. Phase 2 origin baseline is done. `./mvnw verify` is the gate. Do not start Netty transfer (Phase 4) until Phase 3 tracker can return a candidate list.
+Phase 0 contracts, Phase 1 local content engine, Phase 2 origin baseline, and Phase 3 tracker announce/ranking are done. `./mvnw verify` is the gate. Phase 4 Netty transfer may start next.
 
 ## Done
 
@@ -9,6 +9,7 @@ Phase 0 contracts and Phase 1 local content engine are done. Phase 2 origin base
 | 0 | Maven modules, manifest schema, protocol codecs, ADRs, CI |
 | 1 | Chunk → store → signed manifest → verify → rebuild; CLI `gen-key` / `sign` / `verify` |
 | 2 | Origin HTTP: `GET /files/{name}`, Range 206 stream, `GET /manifests/{name}` copy only |
+| 3 | Tracker: announce, Redis HEXPIRE 45s, ranked candidates by site then network group |
 
 ## Phase 2 — Origin baseline (`origin-fixture/`) — done
 
@@ -26,7 +27,7 @@ Keep this module free of Spring. Origin is a dumb byte source; trust still comes
 Serving a `.json` file later is **distribution only** — callers must still run `ManifestVerifier`.
 P2-03 must **stream** from disk (no `readAllBytes`) so a 10 GB asset cannot blow RAM.
 
-## Phase 3 — Tracker announce / ranking (`tracker-service/`)
+## Phase 3 — Tracker announce / ranking (`tracker-service/`) — done
 
 Phone book only. No file bytes in Redis.
 
