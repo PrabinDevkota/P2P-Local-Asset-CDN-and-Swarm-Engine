@@ -140,7 +140,7 @@ Contracts: [docs/manifest-v1.md](docs/manifest-v1.md), [docs/protocol-v1.md](doc
 
 ## Status
 
-**Phase 0 is frozen. Phase 1 local content engine is implemented. Phase 2 origin baseline is complete** (`GET /files/{name}`, Range, `GET /manifests/{name}` copy only). Next is Phase 3 tracker announce/ranking. Do not start Netty until the tracker can return candidates and `./mvnw verify` stays green. `ManifestJson.parse` is not signature verify; origin JSON is not a trust root.
+**Phase 0 is frozen. Phase 1 local content engine is implemented. Phase 2 origin baseline is complete. Phase 3 tracker announce/ranking is complete** (`POST /api/v1/peers/announce`, `GET /api/v1/assets/{assetId}/peers`). Next is Phase 4 Netty two-peer session. Do not start Netty until `./mvnw verify` stays green. `ManifestJson.parse` is not signature verify; origin JSON is not a trust root; the tracker is not a trust root.
 
 
 Industry checklist: [PROJECT_STANDARDS.md](./PROJECT_STANDARDS.md)
