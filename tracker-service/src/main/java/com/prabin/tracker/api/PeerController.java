@@ -45,9 +45,9 @@ public final class PeerController {
 
     @GetMapping("/api/v1/assets/{assetId}/peers")
     public CandidateList list(
-            @PathVariable String assetId,
-            @RequestParam String peerId,
-            @RequestParam(required = false) Integer limit
+            @PathVariable("assetId") String assetId,
+            @RequestParam("peerId") String peerId,
+            @RequestParam(name = "limit", required = false) Integer limit
     ) {
         AssetId asset = parseAssetId(assetId);
         PeerId self = parsePeerId(peerId);
