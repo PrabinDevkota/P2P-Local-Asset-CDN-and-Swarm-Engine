@@ -6,7 +6,7 @@ import java.util.Arrays;
 import java.util.Objects;
 
 /** 16-byte peer identity bound to an auth token in later phases. */
-public final class PeerId {
+public final class PeerId implements Comparable<PeerId> {
 
     private final byte[] bytes;
 
@@ -42,6 +42,11 @@ public final class PeerId {
     @Override
     public int hashCode() {
         return Arrays.hashCode(bytes);
+    }
+
+    @Override
+    public int compareTo(PeerId other) {
+        return Arrays.compareUnsigned(bytes, Objects.requireNonNull(other, "other").bytes);
     }
 
     @Override
