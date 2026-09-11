@@ -1,7 +1,5 @@
 package com.prabin.swarmedge.manifest;
 
-import com.prabin.swarmedge.common.id.Hex;
-
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -10,10 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.List;
-import java.util.Locale;
 import java.util.Objects;
 
 /**
@@ -72,20 +67,6 @@ public final class AssetMaterializer {
             throw new IllegalArgumentException("chunk length mismatch: expected " + chunk.length()
                     + " but was " + data.length);
         }
-        String expected = chunk.sha256().trim().toLowerCase(Locale.ROOT);
-        String actual = Hex.toLowerHex(sha256(data));
-        if (!expected.equals(actual)) {
-            throw new IllegalArgumentException("chunk hash mismatch: expected " + chunk.sha256()
-                    + " but was " + actual);
-        }
         return data;
-    }
-
-    private static byte[] sha256(byte[] data) {
-        try {
-            return MessageDigest.getInstance("SHA-256").digest(data);
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 not available", e);
-        }
     }
 }
