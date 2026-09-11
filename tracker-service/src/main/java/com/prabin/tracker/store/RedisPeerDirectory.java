@@ -40,15 +40,27 @@ public final class RedisPeerDirectory implements PeerDirectory {
         Objects.requireNonNull(peer, "peer");
         String redisKey = key(assetId);
         String field = peer.peerId().toHex();
-        redis.opsForHash().put(redisKey, field, JSON.writeValueAsString(Stored.from(peer)));
-        expireField(redisKey, field);
+        byte[] json = JSON.writeValueAsString(Stored.from(peer)).getBytes(StandardCharsets.UTF_8);
+        redis.execute((RedisCallback<Object>) connection -> {
+            byte[] keyBytes = bytes(redisKey);
+            byte[] fieldBytes = bytes(field);
+            connection.hashCommands().hSet(keyBytes, fieldBytes, json);
+            connection.execute(
+                    "HEXPIRE",
+                    keyBytes,
+                    bytes(Integer.toString(Defaults.PEER_TTL_SECONDS)),
+                    bytes("FIELDS"),
+                    bytes("1"),
+                    fieldBytes);
+            return null;
+        });
     }
 
     @Override
     public List<PeerRecord> list(AssetId assetId) {
         Objects.requireNonNull(assetId, "assetId");
         Map<Object, Object> entries = redis.opsForHash().entries(key(assetId));
-        List<PeerRecord> peers = new ArrayList<>();
+        List<PeerRecord> peers = new ArrayList<>(entries.size());
         for (Map.Entry<Object, Object> entry : entries.entrySet()) {
             try {
                 PeerId peerId = PeerId.fromHex(String.valueOf(entry.getKey()));
@@ -59,19 +71,6 @@ public final class RedisPeerDirectory implements PeerDirectory {
             }
         }
         return List.copyOf(peers);
-    }
-
-    private void expireField(String redisKey, String field) {
-        redis.execute((RedisCallback<Object>) connection -> {
-            connection.execute(
-                    "HEXPIRE",
-                    bytes(redisKey),
-                    bytes(Integer.toString(Defaults.PEER_TTL_SECONDS)),
-                    bytes("FIELDS"),
-                    bytes("1"),
-                    bytes(field));
-            return null;
-        });
     }
 
     private static byte[] bytes(String value) {
