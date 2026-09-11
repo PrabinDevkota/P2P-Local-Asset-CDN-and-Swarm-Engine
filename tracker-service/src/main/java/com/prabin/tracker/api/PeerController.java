@@ -15,7 +15,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -63,11 +62,8 @@ public final class PeerController {
             }
         }
         List<PeerRecord> ranked = LocalityRanker.rank(all, siteId, networkGroupId, self, cap);
-        List<Candidate> candidates = new ArrayList<>(ranked.size());
-        for (PeerRecord peer : ranked) {
-            candidates.add(Candidate.from(peer));
-        }
-        return new CandidateList(asset.toHex(), List.copyOf(candidates));
+        List<Candidate> candidates = ranked.stream().map(Candidate::from).toList();
+        return new CandidateList(asset.toHex(), candidates);
     }
 
     static String observedIp(HttpServletRequest request) {
