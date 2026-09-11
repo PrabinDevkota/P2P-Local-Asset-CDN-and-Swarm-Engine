@@ -144,12 +144,16 @@ public final class OriginHttpServer implements AutoCloseable {
             long remaining = span.length();
             long pos = span.start();
             ByteBuffer fallback = null;
+            boolean transferToWorks = true;
             while (remaining > 0) {
-                long n = in.transferTo(pos, remaining, dest);
-                if (n > 0) {
-                    pos += n;
-                    remaining -= n;
-                    continue;
+                if (transferToWorks) {
+                    long n = in.transferTo(pos, remaining, dest);
+                    if (n > 0) {
+                        pos += n;
+                        remaining -= n;
+                        continue;
+                    }
+                    transferToWorks = false;
                 }
                 if (fallback == null) {
                     fallback = ByteBuffer.allocate((int) Math.min(remaining, 64 * 1024));
