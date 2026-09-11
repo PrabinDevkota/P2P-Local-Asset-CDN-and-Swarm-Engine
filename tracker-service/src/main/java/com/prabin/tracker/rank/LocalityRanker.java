@@ -32,7 +32,7 @@ public final class LocalityRanker {
         }
         Comparator<PeerRecord> byLocalityThenId = Comparator
                 .comparingInt((PeerRecord p) -> tier(p, siteId, networkGroupId))
-                .thenComparing(p -> p.peerId().toHex());
+                .thenComparing(PeerRecord::peerId);
         return peers.stream()
                 .filter(p -> !self.equals(p.peerId()))
                 .sorted(byLocalityThenId)
