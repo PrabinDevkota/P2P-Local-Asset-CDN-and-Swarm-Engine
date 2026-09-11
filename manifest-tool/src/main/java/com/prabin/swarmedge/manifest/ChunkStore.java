@@ -28,8 +28,7 @@ public final class ChunkStore {
     }
 
     public Path pathFor(String sha256Hex) {
-        String hash = normalizeHash(sha256Hex);
-        return chunksDir.resolve(hash.substring(0, 2)).resolve(hash.substring(2, 4)).resolve(hash + ".chunk");
+        return pathForNormalized(normalizeHash(sha256Hex));
     }
 
     public boolean contains(String sha256Hex) {
@@ -37,12 +36,12 @@ public final class ChunkStore {
     }
 
     public Optional<byte[]> read(String sha256Hex) throws IOException {
-        Path path = pathFor(sha256Hex);
+        String expected = normalizeHash(sha256Hex);
+        Path path = pathForNormalized(expected);
         if (!Files.isRegularFile(path)) {
             return Optional.empty();
         }
         byte[] data = Files.readAllBytes(path);
-        String expected = normalizeHash(sha256Hex);
         if (!expected.equals(Hex.toLowerHex(sha256(data)))) {
             throw new IllegalArgumentException("stored chunk is corrupt: " + expected);
         }
@@ -61,7 +60,7 @@ public final class ChunkStore {
             throw new IllegalArgumentException("chunk hash mismatch: expected " + expected + " but was " + actual);
         }
 
-        Path target = pathFor(expected);
+        Path target = pathForNormalized(expected);
         if (Files.isRegularFile(target)) {
             byte[] existing = Files.readAllBytes(target);
             if (!expected.equals(Hex.toLowerHex(sha256(existing)))) {
@@ -85,6 +84,10 @@ public final class ChunkStore {
         return target;
     }
 
+    private Path pathForNormalized(String hash) {
+        return chunksDir.resolve(hash.substring(0, 2)).resolve(hash.substring(2, 4)).resolve(hash + ".chunk");
+    }
+
     private static String normalizeHash(String sha256Hex) {
         String hash = sha256Hex.trim().toLowerCase(Locale.ROOT);
         Hex.fromHex(hash);
@@ -94,9 +97,17 @@ public final class ChunkStore {
         return hash;
     }
 
+    private static final ThreadLocal<MessageDigest> SHA256 = ThreadLocal.withInitial(ChunkStore::newSha256);
+
     private static byte[] sha256(byte[] data) {
+        MessageDigest digest = SHA256.get();
+        digest.reset();
+        return digest.digest(data);
+    }
+
+    private static MessageDigest newSha256() {
         try {
-            return MessageDigest.getInstance("SHA-256").digest(data);
+            return MessageDigest.getInstance("SHA-256");
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 not available", e);
         }
