@@ -10,5 +10,47 @@
     </parent>
     <artifactId>benchmark-runner</artifactId>
     <name>benchmark-runner</name>
-    <description>Experiment orchestration (implemented in Phase 10)</description>
+    <description>Experiment orchestration. Depends on public module APIs, never private internals.</description>
+    <dependencies>
+        <dependency>
+            <groupId>com.prabin</groupId>
+            <artifactId>common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.prabin</groupId>
+            <artifactId>manifest-tool</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.prabin</groupId>
+            <artifactId>peer-agent</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.prabin</groupId>
+            <artifactId>origin-fixture</artifactId>
+        </dependency>
+        <!-- Scenario configs only. See docs/adr/ADR-006-scenario-config-format.md. -->
+        <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
 </project>

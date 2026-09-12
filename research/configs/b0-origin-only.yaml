@@ -1,0 +1,28 @@
+# Baseline B0: origin-only HTTP download, no peers.
+# Reference point for every later baseline. Nothing here is a target or a claim;
+# numbers come out of a run, they do not go into a config.
+scenarioId: b0-origin-only
+baseline: B0
+description: One client pulls one immutable asset from origin over ranged HTTP.
+
+asset:
+  productId: game-x
+  version: 1.4.0
+  fileName: game-x-1.4.0.bin
+  # 64 MiB keeps a smoke run under a minute. The blueprint's standard asset is 1 GiB.
+  sizeBytes: 67108864
+  chunkSizeBytes: 4194304
+
+run:
+  # Three repeats is the P2-03 acceptance test: same asset hash every time.
+  repetitions: 3
+  # Fixed so chunk contents and any tie-break are reproducible.
+  seed: 20260912
+  coldCache: true
+
+origin:
+  maxAttempts: 3
+  initialBackoffMillis: 200
+  maxBackoffMillis: 5000
+  connectTimeoutMillis: 5000
+  requestTimeoutMillis: 60000
