@@ -1,16 +1,23 @@
 package com.prabin.tracker.api;
 
 import com.prabin.swarmedge.common.id.AssetId;
+import com.prabin.swarmedge.common.id.PeerId;
+import com.prabin.tracker.auth.PeerTokens;
 import com.prabin.tracker.store.PeerDirectory;
 import com.prabin.tracker.store.PeerRecord;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -21,7 +28,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(controllers = PeerController.class)
-@Import({TrackerExceptionHandler.class, PeerControllerTest.MemoryPeerDirectory.class})
+@Import({TrackerExceptionHandler.class, PeerControllerTest.MemoryPeerDirectory.class,
+        PeerControllerTest.FixedTokens.class})
 class PeerControllerTest {
 
     private static final String ASSET = "a".repeat(64);
@@ -29,14 +37,19 @@ class PeerControllerTest {
     private static final String SAME_SITE = "2".repeat(32);
     private static final String SAME_GROUP = "3".repeat(32);
     private static final String REMOTE = "4".repeat(32);
+    private static final byte[] SECRET = "a-32-byte-or-longer-tracker-secret".getBytes(StandardCharsets.UTF_8);
 
     @Autowired
     MockMvc mvc;
+
+    @Autowired
+    PeerTokens tokens;
 
     @Test
     void announceStoresObservedIpAndRejectsBadPayloads() throws Exception {
         mvc.perform(post("/api/v1/peers/announce")
                         .contentType(MediaType.APPLICATION_JSON)
+                        .header(HttpHeaders.AUTHORIZATION, bearer(SELF, "site-a", "ng-1"))
                         .content(announce(SELF, "site-a", "ng-1"))
                         .with(request -> {
                             request.setRemoteAddr("10.9.8.7");
@@ -48,14 +61,51 @@ class PeerControllerTest {
 
         mvc.perform(post("/api/v1/peers/announce")
                         .contentType(MediaType.APPLICATION_JSON)
+                        .header(HttpHeaders.AUTHORIZATION, bearer(SELF, "site-a", "ng-1"))
                         .content(announce(SELF, "site-a", "ng-1").replace("9091", "0")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").exists());
 
         mvc.perform(post("/api/v1/peers/announce")
                         .contentType(MediaType.APPLICATION_JSON)
+                        .header(HttpHeaders.AUTHORIZATION, bearer(SELF, "site-a", "ng-1"))
                         .content("{"))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void announceWithoutATokenIsRejected() throws Exception {
+        mvc.perform(post("/api/v1/peers/announce")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(announce(SELF, "site-a", "ng-1")))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("a bearer peer token is required"));
+
+        mvc.perform(post("/api/v1/peers/announce")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer not-a-real-token")
+                        .content(announce(SELF, "site-a", "ng-1")))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void aPeerCannotAnnounceUnderAnotherPeersToken() throws Exception {
+        mvc.perform(post("/api/v1/peers/announce")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header(HttpHeaders.AUTHORIZATION, bearer(REMOTE, "site-a", "ng-1"))
+                        .content(announce(SELF, "site-a", "ng-1")))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("token subject does not match the announcing peer"));
+    }
+
+    @Test
+    void aPeerCannotClaimALocalityItsTokenDoesNotGrant() throws Exception {
+        mvc.perform(post("/api/v1/peers/announce")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header(HttpHeaders.AUTHORIZATION, bearer(SELF, "site-a", "ng-1"))
+                        .content(announce(SELF, "site-b", "ng-1")))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("token does not carry the announced site policy"));
     }
 
     @Test
@@ -79,8 +129,13 @@ class PeerControllerTest {
     private void postPeer(String peerId, String site, String group) throws Exception {
         mvc.perform(post("/api/v1/peers/announce")
                         .contentType(MediaType.APPLICATION_JSON)
+                        .header(HttpHeaders.AUTHORIZATION, bearer(peerId, site, group))
                         .content(announce(peerId, site, group)))
                 .andExpect(status().isOk());
+    }
+
+    private String bearer(String peerId, String site, String group) {
+        return "Bearer " + tokens.issue(PeerId.fromHex(peerId), site, group).token();
     }
 
     private static String announce(String peerId, String site, String group) {
@@ -103,6 +158,15 @@ class PeerControllerTest {
         @Override
         public List<PeerRecord> list(AssetId assetId) {
             return List.copyOf(peers.getOrDefault(assetId.toHex(), Map.of()).values());
+        }
+    }
+
+    /** A known secret so the test can mint the tokens the controller will verify. */
+    @TestConfiguration
+    static class FixedTokens {
+        @Bean
+        PeerTokens peerTokens() {
+            return new PeerTokens(SECRET, PeerTokens.DEFAULT_TTL, Clock.systemUTC());
         }
     }
 }

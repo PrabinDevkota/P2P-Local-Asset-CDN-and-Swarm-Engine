@@ -4,6 +4,7 @@ import com.prabin.swarmedge.common.Defaults;
 import com.prabin.swarmedge.common.id.AssetId;
 import com.prabin.swarmedge.common.id.Hex;
 import com.prabin.swarmedge.common.id.PeerId;
+import com.prabin.tracker.auth.PeerTokens;
 import com.prabin.tracker.rank.LocalityRanker;
 import com.prabin.tracker.store.PeerDirectory;
 import com.prabin.tracker.store.PeerRecord;
@@ -25,21 +26,35 @@ import java.util.Objects;
 @RestController
 public final class PeerController {
 
-    private final PeerDirectory directory;
+    private static final String BEARER = "Bearer ";
 
-    public PeerController(PeerDirectory directory) {
+    private final PeerDirectory directory;
+    private final PeerTokens tokens;
+
+    public PeerController(PeerDirectory directory, PeerTokens tokens) {
         this.directory = Objects.requireNonNull(directory, "directory");
+        this.tokens = Objects.requireNonNull(tokens, "tokens");
     }
 
     @PostMapping("/api/v1/peers/announce")
     public AnnounceAck announce(@RequestBody AnnounceRequest body, HttpServletRequest request) {
         Objects.requireNonNull(body, "body");
         AnnounceRequest.Validated v = body.validate();
+        // Identity and locality come from the token, never from the body alone.
+        tokens.verifyFor(bearerToken(request), v.peerId(), v.siteId(), v.networkGroupId());
         String ip = observedIp(request);
         directory.save(
                 v.assetId(),
                 new PeerRecord(v.peerId(), ip, v.port(), v.siteId(), v.networkGroupId(), v.bitCount(), v.bits()));
         return new AnnounceAck(ip, Defaults.PEER_TTL_SECONDS);
+    }
+
+    static String bearerToken(HttpServletRequest request) {
+        String header = request.getHeader("Authorization");
+        if (header == null || !header.startsWith(BEARER)) {
+            throw new PeerTokens.InvalidTokenException("a bearer peer token is required");
+        }
+        return header.substring(BEARER.length()).trim();
     }
 
     @GetMapping("/api/v1/assets/{assetId}/peers")

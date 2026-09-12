@@ -1,5 +1,6 @@
 package com.prabin.tracker.api;
 
+import com.prabin.tracker.auth.PeerTokens;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -18,5 +19,10 @@ public final class TrackerExceptionHandler {
                 ? ex.getMessage()
                 : "malformed JSON";
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", message));
+    }
+
+    @ExceptionHandler(PeerTokens.InvalidTokenException.class)
+    public ResponseEntity<Map<String, String>> unauthorized(PeerTokens.InvalidTokenException ex) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", ex.getMessage()));
     }
 }
