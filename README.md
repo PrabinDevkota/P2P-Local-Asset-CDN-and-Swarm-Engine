@@ -8,16 +8,16 @@ This is an engineering system and a research testbed. The first paper focuses on
 
 ## Status
 
-Phases **0–3 are done**. `./mvnw verify` is the gate. **Phase 4** (two-peer Netty transfer) is next.
+Phases **0–3 are done** against the blueprint backlog. `./mvnw verify` is the gate and is green. **Phase 4** (two-peer Netty transfer) is next.
 
 | Phase | State | What it is |
 | --- | --- | --- |
 | 0 | Done | Maven modules, manifest schema, protocol codecs, ADRs, CI |
-| 1 | Done | Split file → SHA-256 chunks → store only matching bytes → Ed25519 sign/verify → rebuild. CLI `gen-key` / `sign` / `verify` |
-| 2 | Done | Origin HTTP: `GET /files/{name}`, Range 206 (streamed), `GET /manifests/{name}` (JSON copy only) |
-| 3 | Done | Tracker phone book: announce + ranked candidates. No file bytes |
-| 4 | Not started | Two peers: HELLO → one 256 KiB block → hash full chunk → `putVerified` → HAVE |
-| 5+ | Later | LAPS, multi-peer, EDGE, SQLite index, origin fallback policy, benchmarks |
+| 1 | Done | Split file → SHA-256 chunks → store only matching bytes → SQLite index → Ed25519 sign/verify → rebuild → resume. CLI `gen-key` / `sign` / `verify` |
+| 2 | Done | Baseline B0: origin HTTP with byte accounting, peer-side ranged downloader with resume and retries, three-repeat B0 config |
+| 3 | Done | Tracker phone book: short-lived peer tokens, announce, ranked candidates, 250-record load test. No file bytes |
+| 4 | Next | Two peers: HELLO → one 256 KiB block → hash full chunk → `putVerified` → HAVE |
+| 5+ | Later | LAPS, multi-peer, EDGE, progressive fallback, experiment harness |
 
 Trust rules that must not drift:
 
@@ -50,10 +50,10 @@ The warehouse is the shareable cache. Rebuilding the original file (game binary,
 | Plane | Who | Job | Now |
 | --- | --- | --- | --- |
 | Trust | Publisher + signed manifest | Authorize the release | Phase 1 CLI |
-| Control | `tracker-service/` | Announce, 45s TTL, ranked candidates | Phase 3 |
+| Control | `tracker-service/` | Peer tokens, announce, 45s TTL, ranked candidates | Phase 3 |
 | Data | `peer-agent/` | HELLO → BITFIELD → REQUEST/BLOCK/CANCEL | Codecs exist; session is Phase 4 |
-| Storage | `ChunkStore` | Content-addressed verified chunks | Phase 1 (in `manifest-tool/`; peer will reuse in Phase 4) |
-| Origin | `origin-fixture/` | Dumb HTTP byte source | Phase 2 |
+| Storage | `ChunkStore` + `ChunkIndex` | Content-addressed verified chunks, SQLite metadata | Phase 1 (in `manifest-tool/`; peer reuses it) |
+| Origin | `origin-fixture/` + `OriginDownloader` | Dumb HTTP byte source, ranged pull with byte accounting | Phase 2 |
 
 ```
 [ tracker-service: Spring Boot + Redis ]
@@ -105,18 +105,29 @@ Test-only untrusted byte source. No Spring. No crypto.
 
 Path tricks (`..`, absolute paths) are rejected. Garbage JSON is still served if that file exists on disk.
 
+Add `?runId=…` to attribute bytes to a benchmark run. The server counts only bytes that reached the socket, so an aborted transfer is not billed as delivered, and a 404 or 416 is not billed at all.
+
+## Origin download (implemented)
+
+`OriginDownloader` in `peer-agent/` is baseline B0. One ranged `GET` per 4 MiB chunk, each hashed against the manifest before it is stored. A chunk already in the `ChunkStore` is skipped, so a killed download resumes. Tampered bytes are retried with exponential backoff and then fail closed — they are never written.
+
+`B0Runner` in `benchmark-runner/` repeats that download from `research/configs/b0-origin-only.yaml` and checks every repeat rebuilds a byte-identical asset.
+
 ## Tracker API (implemented)
 
 Phone book only. Requires Redis ≥ 7.4 (`HEXPIRE`).
 
 | Method | Path | Role |
 | --- | --- | --- |
-| `POST` | `/api/v1/peers/announce` | Validate payload; store bitfield + locality; **observed connection IP** (ignore a client-advertised IP) |
+| `POST` | `/api/v1/auth/peer-token` | Dev/research issuance: short-lived HMAC token bound to `peerId` + site policy |
+| `POST` | `/api/v1/peers/announce` | Requires `Authorization: Bearer …`; store bitfield + locality; **observed connection IP** (ignore a client-advertised IP) |
 | `GET` | `/api/v1/assets/{assetId}/peers?peerId=…&limit=20` | Exclude self; rank `siteId` then `networkGroupId`; cap at 20 |
 
 Redis key: `swarm:{assetId}:peers` (HASH). Field = `peerId`. Per-field TTL **45s**. Heartbeat / re-announce is ~15s (peer-side, Phase 4).
 
-Not in Phase 3 (later): `GET /api/v1/assets/{assetId}/manifest`, Actuator, rate limits, peer tokens.
+A token for a different peer, or one claiming a locality it was not issued for, is a 401. Tokens gate the control plane; they never authorize content. Set `swarmedge.tracker.token-secret` per deployment — an empty value generates a random secret at startup, so tokens will not survive a restart.
+
+Carried forward from blueprint §10: Actuator health/Prometheus, announce rate limits, `GET /api/v1/assets/{assetId}/manifest`, and `capabilities` / `uploadBudget` fields for Phase 6 LAPS.
 
 ## Wire protocol v1
 
@@ -189,7 +200,7 @@ Tracker `spring-boot:run` needs a local Redis 7.4+. Origin and `manifest-tool` d
 ├── protocol/
 ├── manifest-tool/
 ├── tracker-service/
-├── peer-agent/          (scaffold until Phase 4)
+├── peer-agent/          (origin downloader; Netty session is Phase 4)
 ├── origin-fixture/
 ├── benchmark-runner/
 ├── docs/
@@ -203,5 +214,5 @@ Industry checklist: [PROJECT_STANDARDS.md](./PROJECT_STANDARDS.md). Threat model
 
 ## References
 
-- `P2P_Local_Asset_CDN_Implementation_and_Research_Blueprint.docx` — source of truth for phases, protocol, experiments
+- [`docs/P2P_Local_Asset_CDN_Implementation_and_Research_Blueprint.docx`](docs/P2P_Local_Asset_CDN_Implementation_and_Research_Blueprint.docx) — source of truth for phases, protocol, experiments
 - Older idea-stage docs (tech spec / step guide) are superseded where they conflict with the blueprint
