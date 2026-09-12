@@ -7,10 +7,12 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.net.URLDecoder;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
 import java.nio.channels.WritableByteChannel;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -19,6 +21,7 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Test-only origin: stream files and signed-manifest JSON from a local directory.
@@ -29,6 +32,7 @@ public final class OriginHttpServer implements AutoCloseable {
     private final Path root;
     private final HttpServer server;
     private final ExecutorService executor;
+    private final OriginByteLedger ledger = new OriginByteLedger();
 
     public OriginHttpServer(Path root) throws IOException {
         this(root, 0);
@@ -57,6 +61,14 @@ public final class OriginHttpServer implements AutoCloseable {
 
     public int port() {
         return server.getAddress().getPort();
+    }
+
+    /**
+     * Bytes this origin actually put on the wire, per {@code ?runId=} and asset name.
+     * Baseline B0 reads this; nothing in the serving path branches on it.
+     */
+    public OriginByteLedger ledger() {
+        return ledger;
     }
 
     @Override
@@ -111,12 +123,33 @@ public final class OriginHttpServer implements AutoCloseable {
             }
             exchange.sendResponseHeaders(status, span.length());
             headersSent = true;
-            copy(file, span, exchange.getResponseBody());
+            AtomicLong served = new AtomicLong();
+            try {
+                copy(file, span, exchange.getResponseBody(), served);
+            } finally {
+                // Count what reached the socket, so an aborted transfer is not billed as delivered.
+                ledger.recordServed(runIdOf(exchange), name, served.get());
+            }
         } catch (IOException e) {
             if (!headersSent) {
                 sendEmpty(exchange, 500);
             }
         }
+    }
+
+    /** {@code ?runId=…} attributes bytes to a benchmark run. Absent means unattributed. */
+    private static String runIdOf(HttpExchange exchange) {
+        String query = exchange.getRequestURI().getQuery();
+        if (query == null || query.isBlank()) {
+            return OriginByteLedger.UNATTRIBUTED_RUN;
+        }
+        for (String pair : query.split("&")) {
+            int eq = pair.indexOf('=');
+            if (eq > 0 && "runId".equals(pair.substring(0, eq))) {
+                return URLDecoder.decode(pair.substring(eq + 1), StandardCharsets.UTF_8);
+            }
+        }
+        return OriginByteLedger.UNATTRIBUTED_RUN;
     }
 
     private Path resolveSafe(String name) {
@@ -134,7 +167,8 @@ public final class OriginHttpServer implements AutoCloseable {
         return resolved;
     }
 
-    private static void copy(Path file, ByteSpan span, OutputStream out) throws IOException {
+    /** Returns through {@code served} the bytes written, including a partial write that then failed. */
+    private static void copy(Path file, ByteSpan span, OutputStream out, AtomicLong served) throws IOException {
         try (FileChannel in = FileChannel.open(file, StandardOpenOption.READ);
              OutputStream body = out) {
             if (span.length() == 0) {
@@ -151,6 +185,7 @@ public final class OriginHttpServer implements AutoCloseable {
                     if (n > 0) {
                         pos += n;
                         remaining -= n;
+                        served.addAndGet(n);
                         continue;
                     }
                     transferToWorks = false;
@@ -170,6 +205,7 @@ public final class OriginHttpServer implements AutoCloseable {
                 body.write(fallback.array(), fallback.position(), fallback.remaining());
                 pos += read;
                 remaining -= read;
+                served.addAndGet(read);
             }
         }
     }

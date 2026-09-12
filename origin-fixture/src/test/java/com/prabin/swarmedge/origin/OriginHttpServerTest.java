@@ -10,6 +10,7 @@ import java.net.Socket;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.TimeUnit;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
@@ -183,6 +184,85 @@ class OriginHttpServerTest {
             assertThat(conn.getResponseCode()).isEqualTo(206);
             assertThat(conn.getHeaderField("Content-Range")).isEqualTo("bytes 0-3/" + json.length);
             assertThat(conn.getInputStream().readAllBytes()).isEqualTo(new byte[] {json[0], json[1], json[2], json[3]});
+            conn.disconnect();
+        }
+    }
+
+    @Test
+    void countsServedBytesPerRunAndAsset() throws Exception {
+        Path root = tempDir.resolve("origin");
+        Files.createDirectories(root);
+        Files.write(root.resolve("ten.bin"), new byte[] {0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+
+        try (OriginHttpServer server = new OriginHttpServer(root)) {
+            drain(get(server, "/files/ten.bin?runId=run-1"));
+            drain(get(server, "/files/ten.bin?runId=run-1", "bytes=0-3"));
+            drain(get(server, "/files/ten.bin?runId=run-2"));
+
+            awaitServed(server, "run-1", "ten.bin", 14);
+            awaitServed(server, "run-2", "ten.bin", 10);
+            assertThat(server.ledger().requests("run-1", "ten.bin")).isEqualTo(2);
+            assertThat(server.ledger().totalBytes()).isEqualTo(24);
+        }
+    }
+
+    @Test
+    void requestsWithoutARunIdCountAsUnattributed() throws Exception {
+        Path root = tempDir.resolve("origin");
+        Files.createDirectories(root);
+        Files.write(root.resolve("ten.bin"), new byte[] {0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+
+        try (OriginHttpServer server = new OriginHttpServer(root)) {
+            drain(get(server, "/files/ten.bin"));
+
+            awaitServed(server, OriginByteLedger.UNATTRIBUTED_RUN, "ten.bin", 10);
+        }
+    }
+
+    @Test
+    void repliesThatServeNoAssetAreNotBilled() throws Exception {
+        Path root = tempDir.resolve("origin");
+        Files.createDirectories(root);
+        Files.write(root.resolve("ten.bin"), new byte[] {0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+
+        try (OriginHttpServer server = new OriginHttpServer(root)) {
+            get(server, "/files/missing.bin?runId=run-1").disconnect();
+            get(server, "/files/ten.bin?runId=run-1", "bytes=99-100").disconnect();
+
+            assertThat(server.ledger().totalBytes()).isZero();
+            assertThat(server.ledger().lines()).isEmpty();
+        }
+    }
+
+    @Test
+    void manifestBytesAreBilledToo() throws Exception {
+        Path root = tempDir.resolve("origin");
+        Files.createDirectories(root);
+        byte[] json = "{\"schemaVersion\":1}".getBytes(UTF_8);
+        Files.write(root.resolve("game-x.json"), json);
+
+        try (OriginHttpServer server = new OriginHttpServer(root)) {
+            drain(get(server, "/manifests/game-x.json?runId=run-1"));
+
+            awaitServed(server, "run-1", "game-x.json", json.length);
+        }
+    }
+
+    /** The client can finish reading before the handler thread bills the transfer. */
+    private static void awaitServed(OriginHttpServer server, String runId, String name, long expected)
+            throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (server.ledger().bytes(runId, name) != expected && System.nanoTime() < deadline) {
+            Thread.sleep(5);
+        }
+        assertThat(server.ledger().bytes(runId, name)).isEqualTo(expected);
+    }
+
+    private static void drain(HttpURLConnection conn) throws Exception {
+        try {
+            assertThat(conn.getResponseCode()).isIn(200, 206);
+            conn.getInputStream().readAllBytes();
+        } finally {
             conn.disconnect();
         }
     }
