@@ -21,6 +21,16 @@
             <artifactId>protocol</artifactId>
         </dependency>
         <dependency>
+            <groupId>com.prabin</groupId>
+            <artifactId>manifest-tool</artifactId>
+        </dependency>
+        <!-- Origin fixture is a benchmark/test server, never a production dependency. -->
+        <dependency>
+            <groupId>com.prabin</groupId>
+            <artifactId>origin-fixture</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-handler</artifactId>
         </dependency>
