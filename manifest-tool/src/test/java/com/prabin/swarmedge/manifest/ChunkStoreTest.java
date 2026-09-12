@@ -76,6 +76,43 @@ class ChunkStoreTest {
                 .hasMessageContaining("corrupt");
     }
 
+    @Test
+    void indexesOnlyChunksThatWereHashedAndCommitted() throws Exception {
+        byte[] data = {1, 2, 3, 4};
+        String hash = sha256Hex(data);
+        byte[] tampered = {1, 2, 3, 5};
+        try (ChunkIndex index = ChunkIndex.open(tempDir.resolve("cache.db"))) {
+            ChunkStore store = new ChunkStore(tempDir, index);
+
+            assertThatThrownBy(() -> store.putVerified(hash, tampered))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(index.find(hash)).isEmpty();
+
+            Path saved = store.putVerified(hash, data);
+
+            ChunkIndex.Entry entry = index.find(hash).orElseThrow();
+            assertThat(entry.verified()).isTrue();
+            assertThat(entry.length()).isEqualTo(data.length);
+            assertThat(entry.storedAt()).isEqualTo(saved.toAbsolutePath().normalize().toString());
+        }
+    }
+
+    @Test
+    void aCorruptStoredChunkStopsCountingAsCached() throws Exception {
+        byte[] data = {1, 2, 3, 4};
+        String hash = sha256Hex(data);
+        try (ChunkIndex index = ChunkIndex.open(tempDir.resolve("cache.db"))) {
+            ChunkStore store = new ChunkStore(tempDir, index);
+            Path saved = store.putVerified(hash, data);
+            Files.write(saved, new byte[] {9, 9, 9, 9});
+
+            assertThatThrownBy(() -> store.read(hash)).isInstanceOf(IllegalArgumentException.class);
+
+            assertThat(index.find(hash).orElseThrow().verified()).isFalse();
+            assertThat(index.verifiedHashes()).isEmpty();
+        }
+    }
+
     private static String sha256Hex(byte[] data) throws Exception {
         return Hex.toLowerHex(MessageDigest.getInstance("SHA-256").digest(data));
     }

@@ -16,14 +16,23 @@ import java.util.Optional;
 /**
  * Disk cache of verified chunks. Key is SHA-256 hex, not file name or chunk index.
  * Unverified bytes are never written into the chunks/ tree.
+ *
+ * <p>An optional {@link ChunkIndex} records metadata for eviction and warm start.
+ * The files stay the truth; the index is derived and may be rebuilt from disk.
  */
 public final class ChunkStore {
 
     private final Path chunksDir;
+    private final ChunkIndex index;
 
     public ChunkStore(Path root) throws IOException {
+        this(root, null);
+    }
+
+    public ChunkStore(Path root, ChunkIndex index) throws IOException {
         Objects.requireNonNull(root, "root");
         this.chunksDir = root.resolve("chunks");
+        this.index = index;
         Files.createDirectories(chunksDir);
     }
 
@@ -43,7 +52,11 @@ public final class ChunkStore {
         }
         byte[] data = Files.readAllBytes(path);
         if (!expected.equals(Hex.toLowerHex(sha256(data)))) {
+            markUnverified(expected);
             throw new IllegalArgumentException("stored chunk is corrupt: " + expected);
+        }
+        if (index != null) {
+            index.touch(expected);
         }
         return Optional.of(data);
     }
@@ -64,8 +77,10 @@ public final class ChunkStore {
         if (Files.isRegularFile(target)) {
             byte[] existing = Files.readAllBytes(target);
             if (!expected.equals(Hex.toLowerHex(sha256(existing)))) {
+                markUnverified(expected);
                 throw new IllegalArgumentException("stored chunk is corrupt: " + expected);
             }
+            record(expected, existing.length, target);
             return target;
         }
         Files.createDirectories(target.getParent());
@@ -81,7 +96,21 @@ public final class ChunkStore {
             Files.deleteIfExists(temp);
             throw e;
         }
+        record(expected, data.length, target);
         return target;
+    }
+
+    /** Index only after the bytes are hashed and committed, so staging never looks cached. */
+    private void record(String hash, long length, Path target) throws IOException {
+        if (index != null) {
+            index.recordVerified(hash, length, target);
+        }
+    }
+
+    private void markUnverified(String hash) throws IOException {
+        if (index != null) {
+            index.markUnverified(hash);
+        }
     }
 
     private Path pathForNormalized(String hash) {
