@@ -50,9 +50,25 @@ Still open against blueprint §10: Actuator health / Prometheus, announce rate l
 
 Tracker never stores file bytes and is not a trust root.
 
+## Phase 4 — Two-peer Netty data plane — done
+
+- [x] P4-01 `SessionState` + `PeerSession`: HELLO → HELLO_ACK → BITFIELD → ACTIVE, with every state able to fail closed
+- [x] P4-02 `StreamingFrameDecoder`: partial, coalesced, and back-to-back frames; bounds checked before any sizing
+- [x] P4-03 `ChunkAssembler` + `ChunkStore.putVerifiedFile`: blocks written at their offset, chunk hashed from the staging file
+- [x] P4-04 `BlockSender`: BLOCK metadata header then `FileRegion`, with a buffered fallback both covered by tests
+- [x] P4-05 `RequestTracker`: CANCEL drops queued work, timeouts re-queue, late data is ignored rather than punished
+- [x] P4-06 `ProtocolFuzzTest` + `SeederBoundsTest`: random noise, every single-bit flip, and hostile field values
+
+A leecher accepts a BLOCK only against a request it issued, with matching chunk, offset, and length. Payload goes straight to a per-chunk staging file, so no chunk is ever held in heap, and the chunk becomes real only when its own SHA-256 matches the signed manifest. A mismatch deletes the staging file and ends the session.
+
+The request budget doubles as the memory budget: unrequested bytes are read past and dropped, so a peer can never have more in flight towards us than the budget allows. Disk and hash work runs on a dedicated single thread; the event loop never blocks (blueprint §21.2).
+
+Measured on this machine: `FileRegion` and the buffered path both transfer byte-identical assets on Windows, so the R2 fallback exists but is not currently needed. No throughput numbers are claimed — that is P10 work.
+
+Not covered in this phase: the token in HELLO is carried but not verified (`PeerAuthPolicy` is the seam for the hardening phase), a hash mismatch ends the session instead of re-fetching from another peer (Phase 6 scheduler), and block-level resume inside a partly received chunk restarts that chunk (chunk-level resume works).
+
 ## Not started
 
-- Phase 4 Netty two-peer data plane (P4-01..P4-06)
 - Phases 5–12 as in the blueprint
 
 Peers must call `ManifestVerifier` with a trusted public key. `ManifestJson.parse` only checks JSON shape.
