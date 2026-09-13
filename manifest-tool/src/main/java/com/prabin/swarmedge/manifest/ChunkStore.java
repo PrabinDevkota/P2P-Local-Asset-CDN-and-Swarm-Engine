@@ -3,6 +3,7 @@ package com.prabin.swarmedge.manifest;
 import com.prabin.swarmedge.common.id.Hex;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -21,6 +22,8 @@ import java.util.Optional;
  * The files stay the truth; the index is derived and may be rebuilt from disk.
  */
 public final class ChunkStore {
+
+    private static final int HASH_BUFFER_BYTES = 64 * 1024;
 
     private final Path chunksDir;
     private final ChunkIndex index;
@@ -100,6 +103,52 @@ public final class ChunkStore {
         return target;
     }
 
+    /**
+     * Commit a staging file that a peer has finished filling. The file is hashed by
+     * streaming, so a 4 MiB chunk never lands in heap, and it is moved into place
+     * only after the hash matches (blueprint §9.2).
+     *
+     * <p>The staging file is consumed either way: on a mismatch it is deleted and
+     * nothing enters the store, because bytes that failed verification must not
+     * survive to be retried or served.
+     */
+    public Path putVerifiedFile(String expectedSha256Hex, Path staging) throws IOException {
+        String expected = normalizeHash(expectedSha256Hex);
+        Objects.requireNonNull(staging, "staging");
+        try {
+            if (!Files.isRegularFile(staging)) {
+                throw new IOException("staging file is missing: " + staging);
+            }
+            String actual = Hex.toLowerHex(sha256OfFile(staging));
+            if (!expected.equals(actual)) {
+                throw new IllegalArgumentException(
+                        "chunk hash mismatch: expected " + expected + " but was " + actual);
+            }
+
+            Path target = pathForNormalized(expected);
+            if (Files.isRegularFile(target)) {
+                // Another release already supplied this chunk; re-check it and drop the duplicate.
+                if (!expected.equals(Hex.toLowerHex(sha256OfFile(target)))) {
+                    markUnverified(expected);
+                    throw new IllegalArgumentException("stored chunk is corrupt: " + expected);
+                }
+                record(expected, Files.size(target), target);
+                return target;
+            }
+            Files.createDirectories(target.getParent());
+            try {
+                Files.move(staging, target, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(staging, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+            record(expected, Files.size(target), target);
+            return target;
+        } finally {
+            // A successful move already removed it; this only cleans up the failure paths.
+            Files.deleteIfExists(staging);
+        }
+    }
+
     /** Index only after the bytes are hashed and committed, so staging never looks cached. */
     private void record(String hash, long length, Path target) throws IOException {
         if (index != null) {
@@ -132,6 +181,20 @@ public final class ChunkStore {
         MessageDigest digest = SHA256.get();
         digest.reset();
         return digest.digest(data);
+    }
+
+    /** Hash without holding the file in memory, so chunk size stays a disk concern. */
+    private static byte[] sha256OfFile(Path file) throws IOException {
+        MessageDigest digest = SHA256.get();
+        digest.reset();
+        byte[] buffer = new byte[HASH_BUFFER_BYTES];
+        try (InputStream in = Files.newInputStream(file)) {
+            int read;
+            while ((read = in.read(buffer)) > 0) {
+                digest.update(buffer, 0, read);
+            }
+        }
+        return digest.digest();
     }
 
     private static MessageDigest newSha256() {
