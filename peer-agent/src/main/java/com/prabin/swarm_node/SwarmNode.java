@@ -11,7 +11,9 @@ import org.slf4j.LoggerFactory;
  * - This process speaks Netty protocol v1 and later schedules blocks (not whole files).
  * - Role is policy (LEECHER/SEEDER/EDGE), not a separate binary.
  *
- * Protocol codecs, scheduler, and cache are intentionally not here yet (Phase 0 contracts first).
+ * The session layer itself lives in {@code peer.net} and {@code peer.session}. This entry point
+ * cannot drive it yet: a seeder has to be handed a manifest that was verified against a trusted
+ * key, and that key handling is a later phase.
  */
 public final class SwarmNode {
 
@@ -35,6 +37,6 @@ public final class SwarmNode {
                 siteId,
                 networkGroupId
         );
-        log.info("Phase 0 scaffold; Netty HELLO session is Phase 4");
+        log.info("scaffold only: use SeederServer / LeecherClient directly until the CLI lands");
     }
 }
