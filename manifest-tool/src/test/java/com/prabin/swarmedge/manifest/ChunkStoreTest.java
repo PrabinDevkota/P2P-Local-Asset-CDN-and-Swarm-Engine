@@ -113,6 +113,74 @@ class ChunkStoreTest {
         }
     }
 
+    @Test
+    void commitsAStagingFileAndConsumesIt() throws Exception {
+        byte[] data = deterministicBytes(200_000);
+        String hash = sha256Hex(data);
+        Path staging = Files.write(tempDir.resolve("0.part"), data);
+        try (ChunkIndex index = ChunkIndex.open(tempDir.resolve("cache.db"))) {
+            ChunkStore store = new ChunkStore(tempDir, index);
+
+            Path saved = store.putVerifiedFile(hash, staging);
+
+            assertThat(saved).isEqualTo(store.pathFor(hash));
+            assertThat(Files.readAllBytes(saved)).containsExactly(data);
+            assertThat(staging).doesNotExist();
+            assertThat(index.find(hash).orElseThrow().length()).isEqualTo(data.length);
+        }
+    }
+
+    @Test
+    void aStagingFileThatFailsItsHashLeavesNothingBehind() throws Exception {
+        byte[] data = {1, 2, 3, 4};
+        String hash = sha256Hex(data);
+        Path staging = Files.write(tempDir.resolve("0.part"), new byte[] {1, 2, 3, 5});
+        try (ChunkIndex index = ChunkIndex.open(tempDir.resolve("cache.db"))) {
+            ChunkStore store = new ChunkStore(tempDir, index);
+
+            assertThatThrownBy(() -> store.putVerifiedFile(hash, staging))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("chunk hash mismatch");
+
+            assertThat(staging).doesNotExist();
+            assertThat(store.contains(hash)).isFalse();
+            assertThat(index.find(hash)).isEmpty();
+        }
+    }
+
+    @Test
+    void committingAChunkWeAlreadyHaveDropsTheDuplicate() throws Exception {
+        byte[] data = {7, 7, 7};
+        String hash = sha256Hex(data);
+        ChunkStore store = new ChunkStore(tempDir);
+        Path first = store.putVerified(hash, data);
+        Path staging = Files.write(tempDir.resolve("0.part"), data);
+
+        Path second = store.putVerifiedFile(hash, staging);
+
+        assertThat(second).isEqualTo(first);
+        assertThat(staging).doesNotExist();
+        assertThat(Files.readAllBytes(first)).containsExactly(data);
+    }
+
+    @Test
+    void aMissingStagingFileIsAnIoFailureNotASilentSuccess() throws Exception {
+        byte[] data = {1};
+        String hash = sha256Hex(data);
+        ChunkStore store = new ChunkStore(tempDir);
+
+        assertThatThrownBy(() -> store.putVerifiedFile(hash, tempDir.resolve("absent.part")))
+                .isInstanceOf(java.io.IOException.class)
+                .hasMessageContaining("staging file is missing");
+        assertThat(store.contains(hash)).isFalse();
+    }
+
+    private static byte[] deterministicBytes(int length) {
+        byte[] out = new byte[length];
+        new java.util.Random(20260913).nextBytes(out);
+        return out;
+    }
+
     private static String sha256Hex(byte[] data) throws Exception {
         return Hex.toLowerHex(MessageDigest.getInstance("SHA-256").digest(data));
     }
