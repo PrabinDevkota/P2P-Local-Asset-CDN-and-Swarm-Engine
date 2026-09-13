@@ -5,6 +5,10 @@ import com.prabin.swarmedge.common.Defaults;
 public final class ProtocolLimits {
 
     public static final int HEADER_AFTER_LENGTH = 12;
+
+    /** BLOCK metadata ahead of the payload: chunkIndex, blockOffset, blockLength. */
+    public static final int BLOCK_META_BYTES = 12;
+
     public static final int MAX_FRAME_LENGTH = 1_048_576;
     public static final int MAX_TOKEN_BYTES = 4096;
     public static final int MAX_ERROR_UTF8_BYTES = 256;
