@@ -66,6 +66,7 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
     private BlockPlan plan;
     private InFlight current;
     private int chunksRemaining;
+    private int pendingCommits;
     private ScheduledFuture<?> sweep;
 
     private long bytesReceived;
@@ -228,7 +229,10 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
             ctx.writeAndFlush(Messages.request(block.chunkIndex(), block.blockOffset(),
                     block.blockLength(), request.requestId()).frame());
         }
-        if (tracker.outstandingCount() == 0 && !plan.isEmpty()) {
+        // Only give up once nothing is in flight anywhere: a chunk still being hashed on
+        // the disk thread may yet turn into progress, and declaring failure over it would
+        // throw away bytes we already have.
+        if (tracker.outstandingCount() == 0 && pendingCommits == 0 && !plan.isEmpty()) {
             failAndClose(ctx, new IOException(
                     "the peer does not hold the remaining " + plan.pendingBlocks() + " blocks"));
         }
@@ -277,6 +281,7 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
         bytesReceived += end.blockLength();
 
         int chunkIndex = finished.chunkIndex();
+        pendingCommits++;
         onDisk(ctx, () -> {
             Optional<Path> stored;
             try {
@@ -291,6 +296,7 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
     }
 
     private void onChunkSettled(ChannelHandlerContext ctx, int chunkIndex, boolean committed) {
+        pendingCommits--;
         if (committed) {
             chunksStored++;
             chunksRemaining--;
@@ -300,6 +306,7 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
     }
 
     private void onChunkRejected(ChannelHandlerContext ctx, ChunkAssembler.VerificationFailed failure) {
+        pendingCommits--;
         hashMismatches++;
         plan.requeueChunk(failure.chunkIndex());
         // One peer, one source of bytes: there is no better peer to ask, so stop.
