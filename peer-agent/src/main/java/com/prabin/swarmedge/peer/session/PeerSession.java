@@ -153,6 +153,21 @@ public final class PeerSession {
         bitfieldSent = true;
     }
 
+    /**
+     * Record a HAVE. A peer may finish a chunk after the handshake, so the inventory
+     * we were given at BITFIELD time is a starting point rather than the whole truth.
+     */
+    public void noteRemoteHas(int chunkIndex) {
+        if (remoteBitfield == null) {
+            throw new ProtocolViolationException("HAVE arrived before BITFIELD");
+        }
+        if (chunkIndex < 0 || chunkIndex >= chunkCount) {
+            throw new ProtocolViolationException("HAVE names chunk " + chunkIndex
+                    + " but the asset has " + chunkCount);
+        }
+        ChunkBitfield.set(remoteBitfield, chunkIndex);
+    }
+
     public boolean remoteHas(int chunkIndex) {
         if (remoteBitfield == null) {
             return false;
