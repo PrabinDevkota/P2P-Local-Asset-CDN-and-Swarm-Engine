@@ -8,7 +8,7 @@ This is an engineering system and a research testbed. The first paper focuses on
 
 ## Status
 
-Phases **0–3 are done** against the blueprint backlog. `./mvnw verify` is the gate and is green. **Phase 4** (two-peer Netty transfer) is next.
+Phases **0–4 are done** against the blueprint backlog. `./mvnw verify` is the gate and is green. **Phase 5** (multi-peer swarm, baseline B1) is next.
 
 | Phase | State | What it is |
 | --- | --- | --- |
@@ -16,8 +16,9 @@ Phases **0–3 are done** against the blueprint backlog. `./mvnw verify` is the 
 | 1 | Done | Split file → SHA-256 chunks → store only matching bytes → SQLite index → Ed25519 sign/verify → rebuild → resume. CLI `gen-key` / `sign` / `verify` |
 | 2 | Done | Baseline B0: origin HTTP with byte accounting, peer-side ranged downloader with resume and retries, three-repeat B0 config |
 | 3 | Done | Tracker phone book: short-lived peer tokens, announce, ranked candidates, 250-record load test. No file bytes |
-| 4 | Next | Two peers: HELLO → one 256 KiB block → hash full chunk → `putVerified` → HAVE |
-| 5+ | Later | LAPS, multi-peer, EDGE, progressive fallback, experiment harness |
+| 4 | Done | Two peers over Netty: HELLO → BITFIELD → REQUEST/BLOCK → hash the whole chunk → `putVerified`. Fuzz and bounds suites included |
+| 5 | Next | Many peers at once: announce, dial up to 8, rarest-first, HAVE broadcast |
+| 6+ | Later | LAPS, EDGE, progressive fallback, experiment harness |
 
 Trust rules that must not drift:
 
@@ -30,7 +31,7 @@ Checklist and phase ticks: [docs/STATUS.md](docs/STATUS.md). File-by-file plan: 
 ## First principles
 
 1. **Trust ≠ transfer.** The signed manifest says *what* bytes are valid. Peers only move bytes. The tracker only answers “who nearby?”
-2. **Control plane ≠ data plane.** `tracker-service/` (Spring Boot + Redis) is the phone book. `peer-agent/` (Netty, Phase 4) will move blocks over protocol v1.
+2. **Control plane ≠ data plane.** `tracker-service/` (Spring Boot + Redis) is the phone book. `peer-agent/` (Netty) moves blocks over protocol v1.
 3. **Chunk ≠ block.** A **chunk** (default 4 MiB) is hashed with SHA-256 and is the only unit stored or seeded. A **block** (default 256 KiB) is a network piece *inside* a chunk. Blocks are not trusted one-by-one; the **whole chunk** must match the manifest hash.
 4. **Locality is policy, not `/24`.** Peers carry `siteId` + `networkGroupId`. The tracker ranks same site first, then same network group, then everyone else (limit 20).
 5. **Measure, don’t promise.** Offload % and Mbps are experiment outcomes — not SLOs in this README.
@@ -51,7 +52,7 @@ The warehouse is the shareable cache. Rebuilding the original file (game binary,
 | --- | --- | --- | --- |
 | Trust | Publisher + signed manifest | Authorize the release | Phase 1 CLI |
 | Control | `tracker-service/` | Peer tokens, announce, 45s TTL, ranked candidates | Phase 3 |
-| Data | `peer-agent/` | HELLO → BITFIELD → REQUEST/BLOCK/CANCEL | Codecs exist; session is Phase 4 |
+| Data | `peer-agent/` | HELLO → BITFIELD → REQUEST/BLOCK/CANCEL | Phase 4, one seeder to one leecher |
 | Storage | `ChunkStore` + `ChunkIndex` | Content-addressed verified chunks, SQLite metadata | Phase 1 (in `manifest-tool/`; peer reuses it) |
 | Origin | `origin-fixture/` + `OriginDownloader` | Dumb HTTP byte source, ranged pull with byte accounting | Phase 2 |
 
@@ -60,7 +61,7 @@ The warehouse is the shareable cache. Rebuilding the original file (game binary,
         │  POST /api/v1/peers/announce
         │  GET  /api/v1/assets/{assetId}/peers?peerId=…&limit=20
         ▼
-┌──────────────┐   Netty protocol v1 (Phase 4)   ┌──────────────┐
+┌──────────────┐   Netty protocol v1             ┌──────────────┐
 │ peer-agent A │◄═══════════════════════════════►│ peer-agent B │
 │ (SEEDER/EDGE)│   blocks over TCP               │ (LEECHER)    │
 └──────────────┘                                 └──────────────┘
@@ -123,15 +124,40 @@ Phone book only. Requires Redis ≥ 7.4 (`HEXPIRE`).
 | `POST` | `/api/v1/peers/announce` | Requires `Authorization: Bearer …`; store bitfield + locality; **observed connection IP** (ignore a client-advertised IP) |
 | `GET` | `/api/v1/assets/{assetId}/peers?peerId=…&limit=20` | Exclude self; rank `siteId` then `networkGroupId`; cap at 20 |
 
-Redis key: `swarm:{assetId}:peers` (HASH). Field = `peerId`. Per-field TTL **45s**. Heartbeat / re-announce is ~15s (peer-side, Phase 4).
+Redis key: `swarm:{assetId}:peers` (HASH). Field = `peerId`. Per-field TTL **45s**. Heartbeat / re-announce is ~15s (peer-side announce loop is Phase 5).
 
 A token for a different peer, or one claiming a locality it was not issued for, is a 401. Tokens gate the control plane; they never authorize content. Set `swarmedge.tracker.token-secret` per deployment — an empty value generates a random secret at startup, so tokens will not survive a restart.
 
 Carried forward from blueprint §10: Actuator health/Prometheus, announce rate limits, `GET /api/v1/assets/{assetId}/manifest`, and `capabilities` / `uploadBudget` fields for Phase 6 LAPS.
 
-## Wire protocol v1
+## Peer-to-peer transfer (implemented)
 
-Codecs and golden vectors exist in `protocol/` (Phase 0). **No live Netty session yet** (Phase 4).
+One seeder, one leecher, real sockets. `SeederServer` listens; `LeecherClient` dials and returns a future that completes only when every chunk in the manifest is verified on disk.
+
+```
+HELLO ─────────────────────────────────► (asset, peerId, token)
+      ◄───────────────────────────────── HELLO_ACK (accepted, maxBlockSize)
+BITFIELD ◄────────────────────────────► BITFIELD          → session is ACTIVE
+REQUEST (chunk, offset, length) ──────►
+      ◄───────────────────────────────── BLOCK header + FileRegion
+                                          → bytes go straight to <chunk>.part
+                                          → chunk hashed from the file → putVerified
+```
+
+What keeps it honest:
+
+- A BLOCK is accepted only against a request this peer issued, with the **same** chunk, offset, and length. Anything else is either late data (read past and dropped) or a protocol violation (connection closed).
+- Payload is written to a per-chunk staging file as it arrives, so **no chunk is ever held in heap**. The chunk is hashed from disk and only then moved into the store.
+- A hash mismatch deletes the staging file and ends the session. Nothing unverified survives to be stored or served.
+- The outstanding-request budget **is** the memory budget: unrequested bytes never reach disk, so a peer cannot push more at us than the budget allows.
+- Hashing and file I/O run on a dedicated thread. The Netty event loop never blocks.
+- A slow reader makes the channel unwritable, which is what stops the seeder pulling more blocks off disk.
+
+Both send paths are tested: `FileRegion` (kernel copy, no heap) and a buffered fallback kept for platforms where `transferTo` misbehaves. Two malformed-input suites back this up — `ProtocolFuzzTest` (random noise, every single-bit flip of a valid stream, allocation amplification) and `SeederBoundsTest` (hostile field values at a live listener, which must close the connection and still serve the next honest peer).
+
+Not yet: the token in HELLO is carried but not verified, a bad chunk ends the session instead of being re-fetched elsewhere, and a partly received chunk restarts rather than resuming mid-chunk. All three are later phases.
+
+## Wire protocol v1
 
 All integers unsigned, big-endian.
 
@@ -174,7 +200,7 @@ No public DHT/BitTorrent replacement, no crypto incentives, no AI scheduling, no
 | --- | --- |
 | JDK | **Java 21** (`maven.compiler.release`); CI uses Temurin 21. JDK 25 can compile `--release 21` |
 | Tracker | Spring Boot 4.1.x + Redis ≥ 7.4 |
-| Peer | Netty **4.2.x** + Jackson + SLF4J (session not wired yet) |
+| Peer | Netty **4.2.x** + Jackson + SLF4J |
 | Origin | JDK `HttpServer` only |
 | Orchestration | Docker Compose (later) |
 
@@ -200,7 +226,7 @@ Tracker `spring-boot:run` needs a local Redis 7.4+. Origin and `manifest-tool` d
 ├── protocol/
 ├── manifest-tool/
 ├── tracker-service/
-├── peer-agent/          (origin downloader; Netty session is Phase 4)
+├── peer-agent/          (origin downloader + Netty one-to-one session)
 ├── origin-fixture/
 ├── benchmark-runner/
 ├── docs/
