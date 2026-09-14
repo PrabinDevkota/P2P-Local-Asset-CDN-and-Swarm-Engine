@@ -11,13 +11,16 @@ import com.prabin.swarmedge.protocol.msg.Messages;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.util.concurrent.ScheduledFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Objects;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -32,6 +35,10 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p>Reads and sends happen on a disk executor, never on the event loop. Requests wait
  * in a bounded queue and are only handed to the executor while the channel is writable,
  * so a slow reader throttles us instead of filling our memory (blueprint §12.3).
+ *
+ * <p>A connection that never finishes its handshake is dropped on a deadline. Without
+ * it, opening sockets and saying nothing would be enough to tie up a seeder for as long
+ * as the operating system kept the connections alive.
  */
 public final class SeederHandler extends SimpleChannelInboundHandler<Object> {
 
@@ -51,6 +58,7 @@ public final class SeederHandler extends SimpleChannelInboundHandler<Object> {
     private final BlockSender sender;
     private final Executor diskExecutor;
     private final PeerAuthPolicy authPolicy;
+    private final Duration handshakeTimeout;
     private final PeerSession session;
 
     private final Deque<Pending> queue = new ArrayDeque<>();
@@ -60,16 +68,21 @@ public final class SeederHandler extends SimpleChannelInboundHandler<Object> {
     private final AtomicLong errorsSent = new AtomicLong();
 
     private int inFlight;
+    private ScheduledFuture<?> handshakeDeadline;
 
     public SeederHandler(AssetId assetId, PeerId localPeerId, ChunkInventory inventory, ChunkStore store,
                          BlockSender sender, Executor diskExecutor, PeerAuthPolicy authPolicy,
-                         int preferredMaxBlockSize) {
+                         int preferredMaxBlockSize, Duration handshakeTimeout) {
         this.assetId = Objects.requireNonNull(assetId, "assetId");
         this.inventory = Objects.requireNonNull(inventory, "inventory");
         this.store = Objects.requireNonNull(store, "store");
         this.sender = Objects.requireNonNull(sender, "sender");
         this.diskExecutor = Objects.requireNonNull(diskExecutor, "diskExecutor");
         this.authPolicy = Objects.requireNonNull(authPolicy, "authPolicy");
+        this.handshakeTimeout = Objects.requireNonNull(handshakeTimeout, "handshakeTimeout");
+        if (handshakeTimeout.isNegative() || handshakeTimeout.isZero()) {
+            throw new IllegalArgumentException("handshakeTimeout must be positive");
+        }
         this.session = new PeerSession(PeerSession.Role.SEEDER, assetId, localPeerId,
                 inventory.chunkCount(), preferredMaxBlockSize);
     }
@@ -97,6 +110,12 @@ public final class SeederHandler extends SimpleChannelInboundHandler<Object> {
     @Override
     public void channelActive(ChannelHandlerContext ctx) {
         session.transitionTo(SessionState.TCP_CONNECTED);
+        handshakeDeadline = ctx.executor().schedule(() -> {
+            if (!session.state().transfersData()) {
+                log.debug("dropping {}: handshake stalled in {}", ctx.channel().remoteAddress(), session.state());
+                ctx.close();
+            }
+        }, handshakeTimeout.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     @Override
@@ -110,9 +129,21 @@ public final class SeederHandler extends SimpleChannelInboundHandler<Object> {
             case BITFIELD -> onBitfield(frame);
             case REQUEST -> onRequest(ctx, frame);
             case CANCEL -> onCancel(frame);
-            case PING -> ctx.writeAndFlush(Messages.pong(Messages.decodePing(frame).nonce()).frame());
-            case HAVE -> Messages.decodeHave(frame);
-            case PONG -> Messages.decodePong(frame);
+            // Everything below is conversation between two peers that have already
+            // agreed who they are. Answering a stranger's PING would make an
+            // unauthenticated socket useful, which is the thing to avoid.
+            case PING -> {
+                session.requireActive(frame.type());
+                ctx.writeAndFlush(Messages.pong(Messages.decodePing(frame).nonce()).frame());
+            }
+            case HAVE -> {
+                session.requireActive(frame.type());
+                session.noteRemoteHas(Messages.decodeHave(frame).chunkIndex());
+            }
+            case PONG -> {
+                session.requireActive(frame.type());
+                Messages.decodePong(frame);
+            }
             case ERROR -> onRemoteError(ctx, frame);
             case HELLO_ACK, BLOCK ->
                     throw new ProtocolViolationException(frame.type() + " is not something a seeder receives");
@@ -152,14 +183,20 @@ public final class SeederHandler extends SimpleChannelInboundHandler<Object> {
     private void sendBitfield(ChannelHandlerContext ctx) {
         ctx.writeAndFlush(Messages.bitfield(inventory.chunkCount(), inventory.bitfield(), 0).frame());
         session.noteBitfieldSent();
-        session.activateIfBitfieldsExchanged();
+        activateIfReady();
     }
 
     private void onBitfield(PeerFrame frame) {
         session.require(SessionState.AUTHENTICATED, frame.type());
         Messages.Bitfield bitfield = Messages.decodeBitfield(frame);
         session.acceptRemoteBitfield(bitfield.bitCount(), bitfield.bits());
-        session.activateIfBitfieldsExchanged();
+        activateIfReady();
+    }
+
+    private void activateIfReady() {
+        if (session.activateIfBitfieldsExchanged()) {
+            cancelHandshakeDeadline();
+        }
     }
 
     private void onRequest(ChannelHandlerContext ctx, PeerFrame frame) {
@@ -244,6 +281,12 @@ public final class SeederHandler extends SimpleChannelInboundHandler<Object> {
     }
 
     @Override
+    public void channelInactive(ChannelHandlerContext ctx) {
+        cancelHandshakeDeadline();
+        queue.clear();
+    }
+
+    @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         if (isViolation(cause)) {
             session.noteViolation();
@@ -252,11 +295,19 @@ public final class SeederHandler extends SimpleChannelInboundHandler<Object> {
         } else {
             log.warn("closing session on {}: {}", ctx.channel().remoteAddress(), cause.toString());
         }
+        cancelHandshakeDeadline();
         queue.clear();
         if (!session.state().isTerminal()) {
             session.transitionTo(SessionState.CLOSED);
         }
         ctx.close();
+    }
+
+    private void cancelHandshakeDeadline() {
+        if (handshakeDeadline != null) {
+            handshakeDeadline.cancel(false);
+            handshakeDeadline = null;
+        }
     }
 
     private static boolean isViolation(Throwable cause) {
