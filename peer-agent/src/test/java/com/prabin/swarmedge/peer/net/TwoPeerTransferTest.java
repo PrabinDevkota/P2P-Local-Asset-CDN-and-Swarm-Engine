@@ -22,6 +22,9 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -232,6 +235,33 @@ class TwoPeerTransferTest {
     }
 
     @Test
+    void aSeederThatAcceptsAndThenSaysNothingDoesNotHangTheTransfer() throws Exception {
+        Peer leecher = emptyPeer("leecher");
+
+        // A listener that accepts the connection and never answers. The block timeout
+        // cannot help here because no block was ever requested, so without a handshake
+        // deadline this fetch would wait as long as the socket stayed open.
+        try (ServerSocket silent = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
+             LeecherClient client = new LeecherClient();
+             ChunkAssembler assembler = assembler(leecher)) {
+
+            LeecherClient.Request request = new LeecherClient.Request(assetId, leecher.peerId(), token(),
+                    new ChunkInventory(manifest, leecher.store()), assembler,
+                    new LeecherHandler.Settings(BLOCK_SIZE, 4, Duration.ofSeconds(10), 3,
+                            Duration.ofMillis(300)),
+                    Duration.ofSeconds(5));
+            InetSocketAddress address =
+                    new InetSocketAddress(InetAddress.getLoopbackAddress(), silent.getLocalPort());
+
+            assertThatThrownBy(() -> await(client.fetch(address, request)))
+                    .hasMessageContaining("did not finish the handshake")
+                    .hasMessageContaining("HELLO_SENT");
+
+            assertThat(new ChunkInventory(manifest, leecher.store()).missing()).hasSize(chunkCount());
+        }
+    }
+
+    @Test
     void aLeecherWithNothingLeftToFetchFinishesWithoutAskingForAnything() throws Exception {
         Peer seeder = seederWithEverything();
         Peer leecher = emptyPeer("leecher");
@@ -272,7 +302,7 @@ class TwoPeerTransferTest {
     private SeederServer server(Peer seeder, BlockSender.Mode mode, PeerAuthPolicy policy) throws Exception {
         SeederServer.Config config = new SeederServer.Config(0, assetId, seeder.peerId(),
                 new ChunkInventory(manifest, seeder.store()), seeder.store(), mode, policy,
-                BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE * 4);
+                BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE * 4, Duration.ofSeconds(10));
         return new SeederServer(config);
     }
 
@@ -282,7 +312,7 @@ class TwoPeerTransferTest {
     }
 
     private static LeecherHandler.Settings settings() {
-        return new LeecherHandler.Settings(BLOCK_SIZE, 4, Duration.ofSeconds(10), 3);
+        return new LeecherHandler.Settings(BLOCK_SIZE, 4, Duration.ofSeconds(10), 3, Duration.ofSeconds(10));
     }
 
     private static byte[] token() {
