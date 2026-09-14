@@ -224,6 +224,19 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
     }
 
     /**
+     * End this session from outside, for example because the asset is now complete or
+     * the swarm is shutting down. Safe to call from any thread.
+     */
+    public void stop() {
+        ChannelHandlerContext ctx = context;
+        if (ctx == null) {
+            completion.completeExceptionally(new IOException("session stopped before it connected"));
+            return;
+        }
+        onEventLoop(ctx, ctx::close);
+    }
+
+    /**
      * Tell this peer we finished a chunk, so it can ask us for it. Safe to call from
      * another session's thread; the write is hopped onto this one.
      */
@@ -425,7 +438,11 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
         }
         InFlight partial = current;
         current = null;
-        if (partial != null) {
+        // Only throw the staging file away when this session was the only one filling it.
+        // In a swarm the same chunk is being built from several peers, so deleting it
+        // would silently destroy blocks that other sessions have already delivered and
+        // are no longer going to fetch again.
+        if (partial != null && plan != null && plan.soleSource()) {
             int chunkIndex = partial.chunkIndex();
             diskExecutor.execute(() -> {
                 try {
