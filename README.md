@@ -8,7 +8,7 @@ This is an engineering system and a research testbed. The first paper focuses on
 
 ## Status
 
-Phases **0–4 are done** against the blueprint backlog. `./mvnw verify` is the gate and is green. **Phase 5** (multi-peer swarm, baseline B1) is next.
+Phases **0–5 are done** against the blueprint backlog. `./mvnw verify` is the gate and is green. **Phase 6** (locality + LAPS, baselines B2/B3) is next.
 
 | Phase | State | What it is |
 | --- | --- | --- |
@@ -17,8 +17,9 @@ Phases **0–4 are done** against the blueprint backlog. `./mvnw verify` is the 
 | 2 | Done | Baseline B0: origin HTTP with byte accounting, peer-side ranged downloader with resume and retries, three-repeat B0 config |
 | 3 | Done | Tracker phone book: short-lived peer tokens, announce, ranked candidates, 250-record load test. No file bytes |
 | 4 | Done | Two peers over Netty: HELLO → BITFIELD → REQUEST/BLOCK → hash the whole chunk → `putVerified`. Fuzz and bounds suites included |
-| 5 | Next | Many peers at once: announce, dial up to 8, rarest-first, HAVE broadcast |
-| 6+ | Later | LAPS, EDGE, progressive fallback, experiment harness |
+| 5 | Done | Baseline B1: dial up to 8 peers, rarest-first over counted availability, one shared block queue, HAVE broadcast, churn smoke |
+| 6 | Next | Locality-aware selection, LAPS scoring, endgame duplicates, baselines B2/B3 |
+| 7+ | Later | Persistent cache, EDGE, progressive fallback, experiment harness |
 
 Trust rules that must not drift:
 
@@ -52,7 +53,7 @@ The warehouse is the shareable cache. Rebuilding the original file (game binary,
 | --- | --- | --- | --- |
 | Trust | Publisher + signed manifest | Authorize the release | Phase 1 CLI |
 | Control | `tracker-service/` | Peer tokens, announce, 45s TTL, ranked candidates | Phase 3 |
-| Data | `peer-agent/` | HELLO → BITFIELD → REQUEST/BLOCK/CANCEL | Phase 4, one seeder to one leecher |
+| Data | `peer-agent/` | HELLO → BITFIELD → REQUEST/BLOCK/CANCEL | Phase 5, a leecher against many seeders |
 | Storage | `ChunkStore` + `ChunkIndex` | Content-addressed verified chunks, SQLite metadata | Phase 1 (in `manifest-tool/`; peer reuses it) |
 | Origin | `origin-fixture/` + `OriginDownloader` | Dumb HTTP byte source, ranged pull with byte accounting | Phase 2 |
 
@@ -124,7 +125,7 @@ Phone book only. Requires Redis ≥ 7.4 (`HEXPIRE`).
 | `POST` | `/api/v1/peers/announce` | Requires `Authorization: Bearer …`; store bitfield + locality; **observed connection IP** (ignore a client-advertised IP) |
 | `GET` | `/api/v1/assets/{assetId}/peers?peerId=…&limit=20` | Exclude self; rank `siteId` then `networkGroupId`; cap at 20 |
 
-Redis key: `swarm:{assetId}:peers` (HASH). Field = `peerId`. Per-field TTL **45s**. Heartbeat / re-announce is ~15s (peer-side announce loop is Phase 5).
+Redis key: `swarm:{assetId}:peers` (HASH). Field = `peerId`. Per-field TTL **45s**, so a heartbeat every ~15s keeps a record alive. The agent does not run that loop yet — a swarm is currently handed its candidate list directly.
 
 A token for a different peer, or one claiming a locality it was not issued for, is a 401. Tokens gate the control plane; they never authorize content. Set `swarmedge.tracker.token-secret` per deployment — an empty value generates a random secret at startup, so tokens will not survive a restart.
 
@@ -155,7 +156,21 @@ What keeps it honest:
 
 Both send paths are tested: `FileRegion` (kernel copy, no heap) and a buffered fallback kept for platforms where `transferTo` misbehaves. Two malformed-input suites back this up — `ProtocolFuzzTest` (random noise, every single-bit flip of a valid stream, allocation amplification) and `SeederBoundsTest` (hostile field values at a live listener, which must close the connection and still serve the next honest peer).
 
-Not yet: the token in HELLO is carried but not verified, a bad chunk ends the session instead of being re-fetched elsewhere, and a partly received chunk restarts rather than resuming mid-chunk. All three are later phases.
+Not yet: the token in HELLO is carried but not verified, and a partly received chunk restarts rather than resuming mid-chunk.
+
+## Swarm (implemented)
+
+`SwarmDownloader` is the many-peer version of the same transfer. It dials up to 8 candidates, hands each session a view of **one shared block queue**, and completes when every chunk verifies. A peer that dies is replaced from the spare candidates.
+
+- **Availability is counted, not guessed.** A peer contributes its whole bitfield when it joins, single chunks as it announces them, and takes all of it back when it drops.
+- **Rarest first, with a seeded tie-break.** The scarcest wanted chunk goes first. When availability is even, the order comes from the run's seed, so a published run replays exactly instead of following map iteration order.
+- **One block, one peer.** A block is leased to a single session and never offered to another. It returns to the queue on timeout, on disconnect, or on a hash failure — none of which invalidates a chunk that already verified.
+- **A failed chunk is rebuilt, not patched.** A partly-poisoned staging file is not worth trusting, so the whole chunk goes back to the queue and can be fetched from someone else. This is what Phase 4 could not do.
+- **A verified chunk is announced immediately.** HAVE goes to every other connected session, so a leecher becomes useful to the swarm before it has finished.
+
+`B1Runner` in `benchmark-runner/` runs this from `research/configs/b1-basic-swarm.yaml`: eight loopback seeders, three repeats, and a churn sweep that kills 10 % and 25 % of them mid-transfer. Every repetition must rebuild a byte-identical asset. Which peers die comes from the seed, so a churn run is as replayable as a clean one. A swarm whose survivors no longer cover every chunk fails rather than hangs.
+
+Not yet: candidates are dialled in the order the tracker gave them rather than by locality, there are no endgame duplicate requests, and the byte cap is per peer rather than per swarm.
 
 ## Wire protocol v1
 
@@ -181,12 +196,12 @@ All integers unsigned, big-endian.
 
 No CHOKE/UNCHOKE in the MVP. Upload uses **device upload budget / backpressure**, not public-swarm tit-for-tat. Contract: [docs/protocol-v1.md](docs/protocol-v1.md).
 
-## Scheduling (later)
+## Scheduling
 
 Two stages, kept separate for experiments:
 
-- **A — which chunk/block?** Rarest-first baseline (+ endgame urgency later)
-- **B — which source?** Locality-only (B2) then **LAPS** (B3)
+- **A — which chunk/block?** Rarest-first baseline — **done** (`ChunkAvailability` + `SwarmScheduler`). Endgame urgency is P6-04.
+- **B — which source?** Locality-only (B2) then **LAPS** (B3) — Phase 6.
 
 Source priority (later): local verified cache → healthy local peers → same-site EDGE → limited origin.
 
@@ -226,7 +241,7 @@ Tracker `spring-boot:run` needs a local Redis 7.4+. Origin and `manifest-tool` d
 ├── protocol/
 ├── manifest-tool/
 ├── tracker-service/
-├── peer-agent/          (origin downloader + Netty one-to-one session)
+├── peer-agent/          (origin downloader + Netty sessions + swarm coordinator)
 ├── origin-fixture/
 ├── benchmark-runner/
 ├── docs/
