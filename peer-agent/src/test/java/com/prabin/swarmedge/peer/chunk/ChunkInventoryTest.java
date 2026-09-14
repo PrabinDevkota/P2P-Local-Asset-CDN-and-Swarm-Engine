@@ -87,6 +87,43 @@ class ChunkInventoryTest {
     }
 
     @Test
+    void whatWeHoldIsReadOnceSoNoRequestHasToTouchTheDisk() throws Exception {
+        ChunkInventory inventory = new ChunkInventory(manifest, store);
+        cache(1);
+
+        // Caching behind the inventory's back is invisible on purpose: a handler asking
+        // "do we have chunk 1?" must never turn into a blocking filesystem call.
+        assertThat(inventory.has(1)).isFalse();
+
+        inventory.rescan();
+
+        assertThat(inventory.has(1)).isTrue();
+    }
+
+    @Test
+    void aChunkThatJustVerifiedIsAdvertisedWithoutRereadingTheStore() {
+        ChunkInventory inventory = new ChunkInventory(manifest, store);
+
+        inventory.markStored(3);
+
+        assertThat(inventory.has(3)).isTrue();
+        assertThat(inventory.missing()).containsExactly(0, 1, 2, 4, 5);
+        assertThat(HexFormat.of().formatHex(inventory.bitfield())).isEqualTo("10");
+        ChunkBitfield.validate(inventory.bitfield(), inventory.chunkCount());
+    }
+
+    @Test
+    void theAdvertisedBitfieldCannotBeEditedThroughTheCopyWeHandOut() {
+        ChunkInventory inventory = new ChunkInventory(manifest, store);
+
+        byte[] handedOut = inventory.bitfield();
+        ChunkBitfield.set(handedOut, 0);
+
+        assertThat(inventory.has(0)).isFalse();
+        assertThat(inventory.bitfield()).containsExactly(new byte[]{0});
+    }
+
+    @Test
     void aChunkIndexOutsideTheManifestIsAProtocolViolation() {
         ChunkInventory inventory = new ChunkInventory(manifest, store);
 
@@ -96,6 +133,11 @@ class ChunkInventoryTest {
         assertThatThrownBy(() -> inventory.chunk(-1))
                 .isInstanceOf(ProtocolViolationException.class);
         assertThatThrownBy(() -> inventory.has(99))
+                .isInstanceOf(ProtocolViolationException.class);
+        // Chunk 6 is a padding bit in the same byte, not a chunk, so it must not read false.
+        assertThatThrownBy(() -> inventory.has(6))
+                .isInstanceOf(ProtocolViolationException.class);
+        assertThatThrownBy(() -> inventory.markStored(6))
                 .isInstanceOf(ProtocolViolationException.class);
     }
 
