@@ -38,6 +38,7 @@ import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * P4-06 at the session level: a peer that sends nonsense gets its connection closed,
@@ -54,6 +55,8 @@ class SeederBoundsTest {
     private static final int CHUNKS = 4;
     private static final long REQUEST_ID = 42L;
     private static final Duration PATIENCE = Duration.ofSeconds(10);
+    /** Short enough for a test to wait it out, long enough not to fire mid-handshake. */
+    private static final Duration HANDSHAKE_TIMEOUT = Duration.ofSeconds(2);
 
     @TempDir
     Path tempDir;
@@ -80,7 +83,7 @@ class SeederBoundsTest {
         }
         server = new SeederServer(new SeederServer.Config(0, assetId, PeerId.of(filled((byte) 1, 16)),
                 new ChunkInventory(manifest, seederStore), seederStore, BlockSender.Mode.BUFFERED,
-                PeerAuthPolicy.ACCEPT_ANY_TOKEN, BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE * 4));
+                PeerAuthPolicy.ACCEPT_ANY_TOKEN, BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE * 4, HANDSHAKE_TIMEOUT));
     }
 
     @AfterEach
@@ -220,6 +223,46 @@ class SeederBoundsTest {
     }
 
     @Test
+    void aConnectionThatNeverHandshakesIsDroppedOnItsOwn() throws Exception {
+        try (Conversation peer = open()) {
+            // Silence is the whole attack: no frame is ever sent, so nothing can be
+            // rejected. Only the deadline gets rid of it.
+            assertThat(peer.closedWithin(HANDSHAKE_TIMEOUT.plusSeconds(3))).isTrue();
+        }
+        assertSeederStillServes();
+    }
+
+    @Test
+    void aHalfFinishedHandshakeIsAlsoDroppedOnItsOwn() throws Exception {
+        // HELLO sent and answered, but the leecher never sends its BITFIELD, so the
+        // session sits in AUTHENTICATED holding a socket.
+        try (Conversation peer = openAndHello()) {
+            assertThat(peer.closedWithin(HANDSHAKE_TIMEOUT.plusSeconds(3))).isTrue();
+        }
+        assertSeederStillServes();
+    }
+
+    @Test
+    void aPingBeforeTheHandshakeIsNotAnsweredButRefused() throws Exception {
+        try (Conversation peer = open()) {
+            peer.send(Frames.encode(Messages.ping(7L).frame()));
+
+            // No PONG: an unauthenticated socket must not be useful for anything.
+            assertThatThrownBy(peer::readFrame)
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("stream ended");
+        }
+        assertSeederStillServes();
+    }
+
+    @Test
+    void chatterThatOnlyMakesSenseMidSessionIsRefusedEarly() throws Exception {
+        assertClosedAfter(Frames.encode(Messages.have(0).frame()));
+        assertClosedAfter(Frames.encode(Messages.cancel(REQUEST_ID).frame()));
+        assertClosedAfter(Frames.encode(Messages.pong(7L).frame()));
+    }
+
+    @Test
     void randomNoiseIsAlwaysRefusedAndNeverTakesTheSeederDown() throws Exception {
         for (int seed = 0; seed < 50; seed++) {
             Random random = new Random(seed);
@@ -245,7 +288,8 @@ class SeederBoundsTest {
             LeecherHandler.Result result = client.fetch(server.address(), new LeecherClient.Request(
                             assetId, PeerId.of(filled((byte) 2, 16)),
                             "token".getBytes(StandardCharsets.US_ASCII), inventory, assembler,
-                            new LeecherHandler.Settings(BLOCK_SIZE, 4, Duration.ofSeconds(5), 3),
+                            new LeecherHandler.Settings(BLOCK_SIZE, 4, Duration.ofSeconds(5), 3,
+                                    Duration.ofSeconds(5)),
                             Duration.ofSeconds(5)))
                     .get(PATIENCE.toSeconds(), TimeUnit.SECONDS);
 
