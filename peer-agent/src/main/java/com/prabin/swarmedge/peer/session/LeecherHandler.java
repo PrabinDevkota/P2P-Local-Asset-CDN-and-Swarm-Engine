@@ -4,6 +4,7 @@ import com.prabin.swarmedge.common.Defaults;
 import com.prabin.swarmedge.common.id.AssetId;
 import com.prabin.swarmedge.common.id.PeerId;
 import com.prabin.swarmedge.peer.chunk.BlockPlan;
+import com.prabin.swarmedge.peer.chunk.BlockSource;
 import com.prabin.swarmedge.peer.chunk.ChunkAssembler;
 import com.prabin.swarmedge.peer.chunk.ChunkInventory;
 import com.prabin.swarmedge.protocol.MessageType;
@@ -62,17 +63,19 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
     private final ChunkAssembler assembler;
     private final Executor diskExecutor;
     private final Settings settings;
+    private final BlockSource.Factory sources;
+    private final SessionEvents events;
     private final PeerSession session;
     private final RequestTracker tracker;
     private final CompletableFuture<Result> completion = new CompletableFuture<>();
     private final Map<BlockPlan.Block, Integer> attempts = new HashMap<>();
 
-    private BlockPlan plan;
+    private BlockSource plan;
     private InFlight current;
-    private int chunksRemaining;
     private int pendingCommits;
     private ScheduledFuture<?> sweep;
     private ScheduledFuture<?> handshakeDeadline;
+    private ChannelHandlerContext context;
 
     private long bytesReceived;
     private int blocksRequested;
@@ -80,14 +83,24 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
     private int hashMismatches;
     private int blocksIgnoredAsLate;
 
+    /** One peer, one queue: this session is the only source of what is missing. */
     public LeecherHandler(AssetId assetId, PeerId localPeerId, byte[] token, ChunkInventory inventory,
                           ChunkAssembler assembler, Executor diskExecutor, Settings settings) {
+        this(assetId, localPeerId, token, inventory, assembler, diskExecutor, settings,
+                negotiated -> new BlockPlan(inventory, negotiated), SessionEvents.NONE);
+    }
+
+    public LeecherHandler(AssetId assetId, PeerId localPeerId, byte[] token, ChunkInventory inventory,
+                          ChunkAssembler assembler, Executor diskExecutor, Settings settings,
+                          BlockSource.Factory sources, SessionEvents events) {
         this.assetId = Objects.requireNonNull(assetId, "assetId");
         this.token = Objects.requireNonNull(token, "token").clone();
         this.inventory = Objects.requireNonNull(inventory, "inventory");
         this.assembler = Objects.requireNonNull(assembler, "assembler");
         this.diskExecutor = Objects.requireNonNull(diskExecutor, "diskExecutor");
         this.settings = Objects.requireNonNull(settings, "settings");
+        this.sources = Objects.requireNonNull(sources, "sources");
+        this.events = Objects.requireNonNull(events, "events");
         this.session = new PeerSession(PeerSession.Role.LEECHER, assetId, localPeerId,
                 inventory.chunkCount(), settings.blockSize());
         this.tracker = new RequestTracker(settings.maxOutstanding(),
@@ -110,6 +123,7 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) {
+        context = ctx;
         session.transitionTo(SessionState.TCP_CONNECTED);
         ctx.writeAndFlush(Messages.hello(assetId, session.localPeerId(), token, 0, HELLO_REQUEST_ID).frame());
         session.transitionTo(SessionState.HELLO_SENT);
@@ -163,10 +177,16 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
         session.negotiate(ack.maxBlockSize());
         session.transitionTo(SessionState.AUTHENTICATED);
 
-        // The plan is built after negotiation: asking in blocks the peer refuses to
-        // serve would be a guaranteed protocol violation on the very first REQUEST.
-        plan = new BlockPlan(inventory, session.maxBlockSize());
-        chunksRemaining = inventory.missing().size();
+        // The source is built after negotiation: asking in blocks the peer refuses to
+        // serve would be a guaranteed protocol violation on the very first REQUEST. A
+        // swarm may refuse the peer outright here, because a shared queue only works if
+        // every session cuts chunks the same way.
+        try {
+            plan = sources.create(session.maxBlockSize());
+        } catch (RuntimeException e) {
+            failAndClose(ctx, new IOException("cannot fetch from this peer: " + e.getMessage(), e));
+            return;
+        }
         sendBitfield(ctx);
     }
 
@@ -180,6 +200,7 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
         session.require(SessionState.AUTHENTICATED, frame.type());
         Messages.Bitfield bitfield = Messages.decodeBitfield(frame);
         session.acceptRemoteBitfield(bitfield.bitCount(), bitfield.bits());
+        events.remoteInventory(bitfield.bits());
         activateIfReady(ctx);
     }
 
@@ -196,8 +217,26 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
 
     private void onHave(ChannelHandlerContext ctx, PeerFrame frame) {
         session.requireActive(frame.type());
-        session.noteRemoteHas(Messages.decodeHave(frame).chunkIndex());
+        int chunkIndex = Messages.decodeHave(frame).chunkIndex();
+        session.noteRemoteHas(chunkIndex);
+        events.remoteGained(chunkIndex);
         requestMore(ctx);
+    }
+
+    /**
+     * Tell this peer we finished a chunk, so it can ask us for it. Safe to call from
+     * another session's thread; the write is hopped onto this one.
+     */
+    public void announceHave(int chunkIndex) {
+        ChannelHandlerContext ctx = context;
+        if (ctx == null) {
+            return;
+        }
+        onEventLoop(ctx, () -> {
+            if (session.state().transfersData()) {
+                ctx.writeAndFlush(Messages.have(chunkIndex).frame());
+            }
+        });
     }
 
     private void onRemoteError(ChannelHandlerContext ctx, PeerFrame frame) {
@@ -222,10 +261,6 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
         if (completion.isDone() || !session.state().transfersData()) {
             return;
         }
-        if (chunksRemaining == 0) {
-            succeed(ctx);
-            return;
-        }
         while (true) {
             Optional<BlockPlan.Block> candidate = plan.next(session::remoteHas);
             if (candidate.isEmpty()) {
@@ -242,13 +277,20 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
             ctx.writeAndFlush(Messages.request(block.chunkIndex(), block.blockOffset(),
                     block.blockLength(), request.requestId()).frame());
         }
-        // Only give up once nothing is in flight anywhere: a chunk still being hashed on
-        // the disk thread may yet turn into progress, and declaring failure over it would
-        // throw away bytes we already have.
-        if (tracker.outstandingCount() == 0 && pendingCommits == 0 && !plan.isEmpty()) {
+        // Only decide anything once nothing is in flight: a chunk still being hashed on
+        // the disk thread may yet turn into progress, and acting on it now would throw
+        // away bytes we already have.
+        if (tracker.outstandingCount() > 0 || pendingCommits > 0) {
+            return;
+        }
+        if (plan.isEmpty()) {
+            succeed(ctx);
+        } else if (plan.soleSource()) {
             failAndClose(ctx, new IOException(
                     "the peer does not hold the remaining " + plan.pendingBlocks() + " blocks"));
         }
+        // Otherwise: idle. Other peers are working on the rest, and blocks they give up
+        // come back to the shared queue, so the next sweep tries again.
     }
 
     private void onBlockBegin(BlockStream.Begin begin) {
@@ -312,10 +354,10 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
         pendingCommits--;
         if (committed) {
             chunksStored++;
-            chunksRemaining--;
             // Now it is ours to serve, and the inventory is what a BITFIELD or HAVE reads.
             inventory.markStored(chunkIndex);
             plan.dropChunk(chunkIndex);
+            events.chunkStored(chunkIndex);
         }
         requestMore(ctx);
     }
@@ -377,6 +419,10 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
         stopSweep();
+        if (plan != null) {
+            // Whatever we were still holding is somebody else's to fetch now (P5-05).
+            plan.surrender();
+        }
         InFlight partial = current;
         current = null;
         if (partial != null) {
@@ -390,8 +436,8 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
             });
         }
         if (!completion.isDone()) {
-            completion.completeExceptionally(new IOException(
-                    "connection closed with " + chunksRemaining + " chunks still missing"));
+            completion.completeExceptionally(new IOException("connection closed with "
+                    + (plan == null ? "the handshake unfinished" : plan.pendingBlocks() + " blocks still owed")));
         }
     }
 
