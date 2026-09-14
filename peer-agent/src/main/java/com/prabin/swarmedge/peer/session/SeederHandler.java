@@ -66,6 +66,7 @@ public final class SeederHandler extends SimpleChannelInboundHandler<Object> {
     private final AtomicLong bytesSent = new AtomicLong();
     private final AtomicLong requestsCancelledBeforeSend = new AtomicLong();
     private final AtomicLong errorsSent = new AtomicLong();
+    private final AtomicLong havesReceived = new AtomicLong();
 
     private int inFlight;
     private ScheduledFuture<?> handshakeDeadline;
@@ -107,6 +108,11 @@ public final class SeederHandler extends SimpleChannelInboundHandler<Object> {
         return errorsSent.get();
     }
 
+    /** HAVEs this peer announced after the handshake, which is how a swarm spreads news. */
+    public long havesReceived() {
+        return havesReceived.get();
+    }
+
     @Override
     public void channelActive(ChannelHandlerContext ctx) {
         session.transitionTo(SessionState.TCP_CONNECTED);
@@ -139,6 +145,7 @@ public final class SeederHandler extends SimpleChannelInboundHandler<Object> {
             case HAVE -> {
                 session.requireActive(frame.type());
                 session.noteRemoteHas(Messages.decodeHave(frame).chunkIndex());
+                havesReceived.incrementAndGet();
             }
             case PONG -> {
                 session.requireActive(frame.type());
