@@ -20,8 +20,11 @@ import java.util.function.IntPredicate;
  *
  * <p>Blocks are only offered for chunks the far side claims to hold, which is why
  * {@link #next(IntPredicate)} takes the remote inventory rather than assuming it.
+ *
+ * <p>This is the single-peer {@link BlockSource}: the queue belongs to one session, so
+ * running out of blocks means the transfer cannot finish.
  */
-public final class BlockPlan {
+public final class BlockPlan implements BlockSource {
 
     private final ChunkInventory inventory;
     private final int blockSize;
@@ -38,7 +41,23 @@ public final class BlockPlan {
         }
     }
 
+    @Override
+    public int blockSize() {
+        return blockSize;
+    }
+
+    @Override
+    public boolean soleSource() {
+        return true;
+    }
+
+    /** Nothing to hand back: a single-peer plan dies with its session. */
+    @Override
+    public void surrender() {
+    }
+
     /** The next block worth asking for, skipping chunks the far side does not have. */
+    @Override
     public Optional<Block> next(IntPredicate remoteHasChunk) {
         Objects.requireNonNull(remoteHasChunk, "remoteHasChunk");
         Iterator<Block> candidates = pending.iterator();
@@ -53,6 +72,7 @@ public final class BlockPlan {
     }
 
     /** Put one block back at the front, for example after a request timed out. */
+    @Override
     public void requeue(Block block) {
         Objects.requireNonNull(block, "block");
         pending.addFirst(block);
@@ -62,6 +82,7 @@ public final class BlockPlan {
      * Start a chunk over. Used when assembled bytes fail the manifest hash: partial
      * progress is gone, so every block of that chunk has to be fetched again.
      */
+    @Override
     public void requeueChunk(int chunkIndex) {
         dropChunk(chunkIndex);
         Deque<Block> restored = new ArrayDeque<>();
@@ -72,14 +93,17 @@ public final class BlockPlan {
     }
 
     /** Forget a chunk, for example because it arrived from somewhere else. */
+    @Override
     public void dropChunk(int chunkIndex) {
         pending.removeIf(block -> block.chunkIndex() == chunkIndex);
     }
 
+    @Override
     public boolean isEmpty() {
         return pending.isEmpty();
     }
 
+    @Override
     public int pendingBlocks() {
         return pending.size();
     }
