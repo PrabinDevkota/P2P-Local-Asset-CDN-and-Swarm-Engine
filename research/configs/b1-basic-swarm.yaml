@@ -1,0 +1,44 @@
+# Baseline B1: rarest-first swarm, many peers, fixed request pipeline.
+# The comparison point for B0 (origin-only). Nothing here is a target or a claim;
+# numbers come out of a run, they do not go into a config.
+scenarioId: b1-basic-swarm
+baseline: B1
+description: One leecher rebuilds one immutable asset from several peers over protocol v1.
+
+asset:
+  productId: game-x
+  version: 1.4.0
+  fileName: game-x-1.4.0.bin
+  # 64 MiB keeps a smoke run under a minute. The blueprint's standard asset is 1 GiB.
+  sizeBytes: 67108864
+  chunkSizeBytes: 4194304
+
+run:
+  # Three repeats, same acceptance test as B0: same asset hash every time.
+  repetitions: 3
+  # Fixes chunk contents, the rarest-first tie-break, and which peers are killed
+  # for churn, so a published run can be replayed exactly.
+  seed: 20260914
+  coldCache: true
+
+swarm:
+  # The blueprint's B1 figure: at most 8 sessions at once.
+  maxPeers: 8
+  # How many seeders are stood up. Anything past maxPeers waits as a replacement.
+  seederCount: 8
+  # Blocks are the network request unit inside a chunk; 256 KiB is the default.
+  blockSizeBytes: 262144
+  # Fixed window of outstanding requests per peer (§8.3). No stop-and-wait.
+  outstandingRequestsPerPeer: 8
+  blockTimeoutMillis: 30000
+  handshakeTimeoutMillis: 10000
+  connectTimeoutMillis: 5000
+  maxAttemptsPerBlock: 3
+
+churn:
+  # P5-05 smoke: kill this share of the seeders mid-transfer and expect the swarm
+  # to finish anyway, as long as the survivors still cover every chunk.
+  killFractions: [0.0, 0.10, 0.25]
+  # Seeders each hold the whole asset here, so coverage survives the kills. A
+  # scenario where it does not is a failure case, not a smoke test.
+  everyPeerHoldsEverything: true
