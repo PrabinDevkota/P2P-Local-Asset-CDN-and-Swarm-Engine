@@ -9,7 +9,6 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.DefaultFileRegion;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -102,16 +101,18 @@ public final class BlockSender {
             throws IOException {
         ByteBuf payload = channel.alloc().buffer(blockLength, blockLength);
         try (FileChannel file = FileChannel.open(chunkFile)) {
-            ByteBuffer target = ByteBuffer.allocate(blockLength);
+            // Straight into the buffer that goes out: staging the block in a second
+            // array first would double the memory this fallback costs per send.
             long position = blockOffset;
-            while (target.hasRemaining()) {
-                int read = file.read(target, position);
+            int remaining = blockLength;
+            while (remaining > 0) {
+                int read = payload.writeBytes(file, position, remaining);
                 if (read <= 0) {
                     throw new IOException("chunk file ended early at offset " + position);
                 }
                 position += read;
+                remaining -= read;
             }
-            payload.writeBytes(target.flip());
             return payload;
         } catch (IOException | RuntimeException e) {
             payload.release();
