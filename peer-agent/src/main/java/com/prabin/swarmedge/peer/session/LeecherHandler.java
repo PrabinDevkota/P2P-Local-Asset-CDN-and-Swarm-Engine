@@ -42,6 +42,10 @@ import java.util.concurrent.TimeUnit;
  * session, because with a single peer there is nowhere better to ask. Choosing a
  * different peer on a hash mismatch is the scheduler's job in a later phase.
  *
+ * <p>A seeder that accepts the connection and then says nothing would otherwise leave
+ * the transfer waiting forever, because the block timeout only starts once blocks are
+ * being requested. The handshake therefore has a deadline of its own.
+ *
  * <p>All disk work runs on {@code diskExecutor}. It must be single-threaded: block
  * writes and the commit that follows them are ordered by submission, not by locking.
  */
@@ -68,6 +72,7 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
     private int chunksRemaining;
     private int pendingCommits;
     private ScheduledFuture<?> sweep;
+    private ScheduledFuture<?> handshakeDeadline;
 
     private long bytesReceived;
     private int blocksRequested;
@@ -108,6 +113,13 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
         session.transitionTo(SessionState.TCP_CONNECTED);
         ctx.writeAndFlush(Messages.hello(assetId, session.localPeerId(), token, 0, HELLO_REQUEST_ID).frame());
         session.transitionTo(SessionState.HELLO_SENT);
+        handshakeDeadline = ctx.executor().schedule(() -> {
+            if (!session.state().transfersData()) {
+                failAndClose(ctx, new IOException(
+                        "the seeder did not finish the handshake within " + settings.handshakeTimeout()
+                                + ", stalled in " + session.state()));
+            }
+        }, settings.handshakeTimeout().toMillis(), TimeUnit.MILLISECONDS);
     }
 
     @Override
@@ -175,6 +187,7 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
         if (!session.activateIfBitfieldsExchanged()) {
             return;
         }
+        cancelHandshakeDeadline();
         long interval = Math.max(1, settings.blockTimeout().toMillis() / 2);
         sweep = ctx.executor().scheduleAtFixedRate(
                 () -> onTimeoutSweep(ctx), interval, interval, TimeUnit.MILLISECONDS);
@@ -300,6 +313,8 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
         if (committed) {
             chunksStored++;
             chunksRemaining--;
+            // Now it is ours to serve, and the inventory is what a BITFIELD or HAVE reads.
+            inventory.markStored(chunkIndex);
             plan.dropChunk(chunkIndex);
         }
         requestMore(ctx);
@@ -392,9 +407,17 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
     }
 
     private void stopSweep() {
+        cancelHandshakeDeadline();
         if (sweep != null) {
             sweep.cancel(false);
             sweep = null;
+        }
+    }
+
+    private void cancelHandshakeDeadline() {
+        if (handshakeDeadline != null) {
+            handshakeDeadline.cancel(false);
+            handshakeDeadline = null;
         }
     }
 
@@ -438,8 +461,10 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
      * @param maxOutstanding     requests in flight, which is also the in-flight byte budget
      * @param blockTimeout       how long a block may take before it is cancelled and retried
      * @param maxAttemptsPerBlock attempts before the session gives up on the asset
+     * @param handshakeTimeout   how long the seeder has to reach ACTIVE before we give up
      */
-    public record Settings(int blockSize, int maxOutstanding, Duration blockTimeout, int maxAttemptsPerBlock) {
+    public record Settings(int blockSize, int maxOutstanding, Duration blockTimeout, int maxAttemptsPerBlock,
+                           Duration handshakeTimeout) {
 
         public Settings {
             if (blockSize <= 0) {
@@ -452,11 +477,15 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
                 throw new IllegalArgumentException("maxAttemptsPerBlock must be positive");
             }
             Objects.requireNonNull(blockTimeout, "blockTimeout");
+            Objects.requireNonNull(handshakeTimeout, "handshakeTimeout");
+            if (handshakeTimeout.isNegative() || handshakeTimeout.isZero()) {
+                throw new IllegalArgumentException("handshakeTimeout must be positive");
+            }
         }
 
         public static Settings defaults() {
             return new Settings(Defaults.BLOCK_SIZE_BYTES, Defaults.OUTSTANDING_REQUESTS_PER_PEER,
-                    Duration.ofSeconds(30), 3);
+                    Duration.ofSeconds(30), 3, Duration.ofSeconds(10));
         }
     }
 
