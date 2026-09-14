@@ -285,7 +285,7 @@ class SeederBoundsTest {
              ChunkAssembler assembler = new ChunkAssembler(inventory, leecherStore,
                      tempDir.resolve("leecher-staging-" + System.nanoTime()))) {
 
-            LeecherHandler.Result result = client.fetch(server.address(), new LeecherClient.Request(
+            LeecherHandler.Result result = client.fetch(server.address(), LeecherClient.Request.singlePeer(
                             assetId, PeerId.of(filled((byte) 2, 16)),
                             "token".getBytes(StandardCharsets.US_ASCII), inventory, assembler,
                             new LeecherHandler.Settings(BLOCK_SIZE, 4, Duration.ofSeconds(5), 3,
