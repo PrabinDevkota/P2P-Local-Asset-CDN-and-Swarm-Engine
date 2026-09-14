@@ -23,6 +23,7 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
@@ -69,7 +70,7 @@ public final class SeederServer implements AutoCloseable {
                             SeederHandler handler = new SeederHandler(
                                     config.assetId(), config.peerId(), config.inventory(), config.store(),
                                     new BlockSender(config.sendMode()), diskExecutor, config.authPolicy(),
-                                    config.maxBlockSize());
+                                    config.maxBlockSize(), config.handshakeTimeout());
                             lastSession = handler;
                             ch.pipeline().addLast(
                                     new StreamingFrameDecoder(ProtocolLimits.MAX_FRAME_LENGTH, config.maxBlockSize()),
@@ -116,7 +117,8 @@ public final class SeederServer implements AutoCloseable {
     }
 
     /**
-     * @param port 0 binds an ephemeral port, which is what tests and local runs want
+     * @param port             0 binds an ephemeral port, which is what tests and local runs want
+     * @param handshakeTimeout how long a connection may sit below ACTIVE before it is dropped
      */
     public record Config(
             int port,
@@ -128,7 +130,10 @@ public final class SeederServer implements AutoCloseable {
             PeerAuthPolicy authPolicy,
             int maxBlockSize,
             int lowWaterMark,
-            int highWaterMark) {
+            int highWaterMark,
+            Duration handshakeTimeout) {
+
+        public static final Duration DEFAULT_HANDSHAKE_TIMEOUT = Duration.ofSeconds(10);
 
         public Config {
             Objects.requireNonNull(assetId, "assetId");
@@ -137,6 +142,7 @@ public final class SeederServer implements AutoCloseable {
             Objects.requireNonNull(store, "store");
             Objects.requireNonNull(sendMode, "sendMode");
             Objects.requireNonNull(authPolicy, "authPolicy");
+            Objects.requireNonNull(handshakeTimeout, "handshakeTimeout");
             if (maxBlockSize <= 0 || maxBlockSize > ProtocolLimits.absoluteMaxBlockSize()) {
                 throw new IllegalArgumentException("maxBlockSize out of range: " + maxBlockSize);
             }
@@ -148,7 +154,8 @@ public final class SeederServer implements AutoCloseable {
         public static Config of(AssetId assetId, PeerId peerId, ChunkInventory inventory, ChunkStore store,
                                 BlockSender.Mode sendMode, int maxBlockSize) {
             return new Config(0, assetId, peerId, inventory, store, sendMode,
-                    PeerAuthPolicy.ACCEPT_ANY_TOKEN, maxBlockSize, maxBlockSize, maxBlockSize * 4);
+                    PeerAuthPolicy.ACCEPT_ANY_TOKEN, maxBlockSize, maxBlockSize, maxBlockSize * 4,
+                    DEFAULT_HANDSHAKE_TIMEOUT);
         }
     }
 }
