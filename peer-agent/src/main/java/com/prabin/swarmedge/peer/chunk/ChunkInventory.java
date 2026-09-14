@@ -24,10 +24,10 @@ import java.util.Objects;
  * {@code stat} calls on a Netty event loop (blueprint §21.2). Construction and
  * {@link #rescan()} do that I/O; nothing else here touches the disk.
  *
- * <p>Ownership: build this off the event loop. A leecher owns its instance and updates
- * it with {@link #markStored(int)} from its own event loop as chunks verify. A seeder
- * shares one instance across connections and only reads it, which is safe because the
- * snapshot is published before the listener binds.
+ * <p>Build this off the event loop: the constructor and {@link #rescan()} are the only
+ * methods that touch the disk. Everything else is in-memory and synchronized, because a
+ * swarm shares one inventory between its scheduler and every session, and two sessions
+ * can verify different chunks at the same moment.
  */
 public final class ChunkInventory {
 
@@ -48,7 +48,7 @@ public final class ChunkInventory {
     }
 
     /** True when the verified bytes of this chunk are already on disk. */
-    public boolean has(int chunkIndex) {
+    public synchronized boolean has(int chunkIndex) {
         requireKnownChunk(chunkIndex);
         return ChunkBitfield.get(present, chunkIndex);
     }
@@ -57,7 +57,7 @@ public final class ChunkInventory {
      * Record a chunk that has just been verified into the store. Cheaper and more
      * truthful than a rescan: the caller has just proved this one chunk is there.
      */
-    public void markStored(int chunkIndex) {
+    public synchronized void markStored(int chunkIndex) {
         requireKnownChunk(chunkIndex);
         ChunkBitfield.set(present, chunkIndex);
     }
@@ -65,8 +65,9 @@ public final class ChunkInventory {
     /** Re-read the store. Blocking I/O, so never call this from an event loop. */
     public void rescan() {
         for (int i = 0; i < chunks.size(); i++) {
-            if (store.contains(chunks.get(i).sha256())) {
-                ChunkBitfield.set(present, i);
+            boolean stored = store.contains(chunks.get(i).sha256());
+            if (stored) {
+                markStored(i);
             }
         }
     }
@@ -95,11 +96,11 @@ public final class ChunkInventory {
     }
 
     /** Inventory to advertise in BITFIELD. */
-    public byte[] bitfield() {
+    public synchronized byte[] bitfield() {
         return present.clone();
     }
 
-    public List<Integer> missing() {
+    public synchronized List<Integer> missing() {
         List<Integer> missing = new ArrayList<>();
         for (int i = 0; i < chunks.size(); i++) {
             if (!ChunkBitfield.get(present, i)) {
@@ -109,7 +110,7 @@ public final class ChunkInventory {
         return List.copyOf(missing);
     }
 
-    public boolean complete() {
+    public synchronized boolean complete() {
         return missing().isEmpty();
     }
 
