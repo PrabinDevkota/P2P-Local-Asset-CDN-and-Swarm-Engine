@@ -31,15 +31,19 @@ Supporting work: `ChunkStore.putVerifiedFile` commits a staging file by streamin
 
 ## Phase 5 — Basic swarm, baseline B1 (`peer-agent/`)
 
-Phase 4 proved one connection. Phase 5 is about many, and the new problems are all about choice: which peers to connect to, which chunk to want next, and how to avoid every peer fetching the same chunk.
+Phase 4 proved one connection. Phase 5 is about many, and every new problem is a question of choice: which chunk to want next, which peer to ask for it, and how to stop eight sessions from fetching the same block.
 
-| Step | Likely file | Job |
+Blueprint backlog (§16) with its own acceptance tests:
+
+| Step | Job | Acceptance |
 | --- | --- | --- |
-| P5-01 | `PeerPool.java` | Announce to the tracker, dial up to 8 candidates, replace peers that drop |
-| P5-02 | `ChunkScheduler.java` | Rarest-first across the connected set, using the bitfields we already track |
-| P5-03 | `HaveBroadcaster.java` | Announce a chunk only after it verifies, so nobody is sent to a peer that cannot serve it |
-| P5-04 | `SwarmDownloader.java` | Drive many sessions against one `ChunkAssembler` and one budget |
-| P5-05 | `b1-basic-swarm.yaml` | B1 scenario: one seeder, several leechers, origin only as fallback |
+| P5-01 | Bitfield / HAVE inventory aggregation | A newly verified chunk is immediately discoverable to connected peers |
+| P5-02 | Rarest-first selection | A deterministic fixture picks the minimum-availability chunk; the tie-break is seeded |
+| P5-03 | Request pipeline, 8 per peer | Several requests outstanding at once; no stop-and-wait |
+| P5-04 | Eight-peer scenario | Every peer completes and its output hashes match the manifest |
+| P5-05 | Churn smoke at 10% and 25% | A dropped peer's blocks are re-queued and the swarm still finishes while coverage holds |
+
+From §8.3, the pipeline rules that go with it: a block is never scheduled twice in normal mode, a timeout or disconnect returns the block to the scheduler without invalidating verified chunks, and outstanding bytes are capped per peer and globally. Endgame duplicates are explicitly **not** here — that is P6-04.
 
 Rules carried forward: no blocking hash, file, or SQLite work on a Netty event loop; a chunk is advertised only after it verifies; the request budget stays the memory budget.
 
