@@ -72,8 +72,9 @@ class BlockPlanTest {
     @Test
     void chunksAlreadyInTheCacheAreNeverRequested() throws Exception {
         cache(0);
-
-        BlockPlan plan = new BlockPlan(inventory, BLOCK_SIZE);
+        // The inventory reads the store when it is built, which is what a peer does at
+        // startup. Caching behind its back is not something the plan can see.
+        BlockPlan plan = new BlockPlan(new ChunkInventory(manifest, store), BLOCK_SIZE);
 
         assertThat(drain(plan)).extracting(BlockPlan.Block::chunkIndex).doesNotContain(0);
         assertThat(plan.pendingBlocks()).isZero();
