@@ -65,6 +65,12 @@ The request budget doubles as the memory budget: unrequested bytes are read past
 
 Measured on this machine: `FileRegion` and the buffered path both transfer byte-identical assets on Windows, so the R2 fallback exists but is not currently needed. No throughput numbers are claimed — that is P10 work.
 
+Found and fixed on review of this phase:
+
+- `ChunkInventory` asked the filesystem on every call, so a handshake put one `stat` per chunk on the event loop and a seeder added one more per REQUEST. Presence is now read once, off the loop, and updated as chunks verify.
+- Nothing reaped a connection that stalled below ACTIVE. A seeder could be tied up by sockets that said nothing, and a leecher waited forever on a seeder that accepted and went quiet, because the block timeout only starts once blocks are being requested. Both sides now have a handshake deadline.
+- The seeder answered PING and accepted HAVE, PONG, and CANCEL before the handshake. An unauthenticated socket should not be useful for anything, so those are refused now.
+
 Not covered in this phase: the token in HELLO is carried but not verified (`PeerAuthPolicy` is the seam for the hardening phase), a hash mismatch ends the session instead of re-fetching from another peer (Phase 6 scheduler), and block-level resume inside a partly received chunk restarts that chunk (chunk-level resume works).
 
 ## Not started
