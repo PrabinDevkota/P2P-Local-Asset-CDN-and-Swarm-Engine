@@ -73,8 +73,24 @@ Found and fixed on review of this phase:
 
 Not covered in this phase: the token in HELLO is carried but not verified (`PeerAuthPolicy` is the seam for the hardening phase), a hash mismatch ends the session instead of re-fetching from another peer (Phase 6 scheduler), and block-level resume inside a partly received chunk restarts that chunk (chunk-level resume works).
 
+## Phase 5 — Basic swarm (B1) — done
+
+- [x] P5-01 `ChunkAvailability`: BITFIELD on join and HAVE mid-session, both folded into one holder count per chunk
+- [x] P5-02 Rarest-first selection with a seeded tie-break, so an even swarm still replays in the same order
+- [x] P5-03 `SwarmScheduler`: one shared block queue behind a per-session `BlockSource` view, 8 outstanding per peer
+- [x] P5-04 `B1Runner` + `research/configs/b1-basic-swarm.yaml`: eight seeders, repeats agree on the asset hash
+- [x] P5-05 Churn smoke at 10 % and 25 %: killed peers' blocks are re-queued and the swarm still finishes
+
+Phase 4 proved one connection; Phase 5 is about the choices that only exist once there are many. Availability is counted, not guessed: a peer contributes its whole bitfield when it joins, single chunks as it announces them, and takes all of it back when it drops. Selection asks for the scarcest wanted chunk first, and ties break on a seed rather than on map order.
+
+No block is handed to two peers at once. A block is leased to one session, and comes back to the queue on timeout, on a hash failure, or when the session dies — none of which invalidates a chunk that already verified. A chunk that fails its hash is rebuilt from nothing rather than patched, because a partly-poisoned staging file is not worth trusting.
+
+Churn is the interesting case and it is the one that is tested: peers are killed mid-transfer, their in-flight work is redistributed, and the run still produces the manifest's asset hash. Which peers die comes from the scenario seed, so a churn run is as replayable as a clean one. A swarm whose survivors no longer cover every chunk fails rather than hangs.
+
+Not covered in this phase: endgame duplicate requests and cancel (P6-04), locality-aware peer choice (Phase 6 — the swarm currently dials candidates in the order the tracker gave them), and per-swarm global byte caps beyond the per-peer budget.
+
 ## Not started
 
-- Phases 5–12 as in the blueprint
+- Phases 6–12 as in the blueprint
 
 Peers must call `ManifestVerifier` with a trusted public key. `ManifestJson.parse` only checks JSON shape.
