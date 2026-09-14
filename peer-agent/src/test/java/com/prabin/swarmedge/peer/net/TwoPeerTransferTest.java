@@ -206,7 +206,7 @@ class TwoPeerTransferTest {
              LeecherClient client = new LeecherClient();
              ChunkAssembler assembler = assembler(leecher)) {
 
-            LeecherClient.Request request = new LeecherClient.Request(otherAsset, leecher.peerId(),
+            LeecherClient.Request request = LeecherClient.Request.singlePeer(otherAsset, leecher.peerId(),
                     token(), new ChunkInventory(manifest, leecher.store()), assembler, settings(),
                     Duration.ofSeconds(5));
 
@@ -245,7 +245,7 @@ class TwoPeerTransferTest {
              LeecherClient client = new LeecherClient();
              ChunkAssembler assembler = assembler(leecher)) {
 
-            LeecherClient.Request request = new LeecherClient.Request(assetId, leecher.peerId(), token(),
+            LeecherClient.Request request = LeecherClient.Request.singlePeer(assetId, leecher.peerId(), token(),
                     new ChunkInventory(manifest, leecher.store()), assembler,
                     new LeecherHandler.Settings(BLOCK_SIZE, 4, Duration.ofSeconds(10), 3,
                             Duration.ofMillis(300)),
@@ -307,7 +307,7 @@ class TwoPeerTransferTest {
     }
 
     private LeecherClient.Request request(Peer leecher, ChunkAssembler assembler) {
-        return new LeecherClient.Request(assetId, leecher.peerId(), token(),
+        return LeecherClient.Request.singlePeer(assetId, leecher.peerId(), token(),
                 new ChunkInventory(manifest, leecher.store()), assembler, settings(), Duration.ofSeconds(5));
     }
 
