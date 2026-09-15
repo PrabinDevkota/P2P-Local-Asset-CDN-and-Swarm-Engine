@@ -32,6 +32,12 @@ public interface BlockSource {
     /** Give one block back, for example after a request timed out or was refused. */
     void requeue(BlockPlan.Block block);
 
+    /**
+     * These bytes arrived. In the endgame the same block may have gone to a second peer,
+     * and this is what tells that peer to stop: first arrival wins (§8.3).
+     */
+    void completed(BlockPlan.Block block);
+
     /** Start a chunk over because its assembled bytes failed the manifest hash. */
     void requeueChunk(int chunkIndex);
 

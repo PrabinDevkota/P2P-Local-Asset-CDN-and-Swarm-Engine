@@ -92,6 +92,14 @@ public final class BlockPlan implements BlockSource {
         }
     }
 
+    /**
+     * Nothing to do: with one peer a block only ever had one source, so there is no
+     * duplicate to call off.
+     */
+    @Override
+    public void completed(Block block) {
+    }
+
     /** Forget a chunk, for example because it arrived from somewhere else. */
     @Override
     public void dropChunk(int chunkIndex) {

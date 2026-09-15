@@ -130,6 +130,23 @@ public final class RequestTracker {
     }
 
     /**
+     * Find an open request by what it asked for rather than by its id.
+     *
+     * <p>The endgame needs this: another peer delivered the same block, and the scheduler
+     * knows which block to call off but not which request id this session used for it.
+     */
+    public Optional<Outstanding> findBySpan(int chunkIndex, int blockOffset, int blockLength) {
+        for (Outstanding request : outstanding.values()) {
+            if (request.chunkIndex() == chunkIndex
+                    && request.blockOffset() == blockOffset
+                    && request.blockLength() == blockLength) {
+                return Optional.of(request);
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
      * Give up on a request. Data that is already on its way becomes late data rather
      * than a violation, which is what lets a CANCEL race with a BLOCK safely.
      */
