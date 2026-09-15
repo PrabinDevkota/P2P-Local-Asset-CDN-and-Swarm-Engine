@@ -47,19 +47,30 @@ From §8.3, the pipeline rules that hold: a block is never scheduled twice in no
 
 Rules carried forward: no blocking hash, file, or SQLite work on a Netty event loop; a chunk is advertised only after it verifies; the request budget stays the memory budget.
 
-## Phase 6 — Locality + LAPS, baselines B2/B3 (`peer-agent/`, `tracker-service/`)
+## Phase 6 — Locality + LAPS (`common/`, `peer-agent/`, `tracker-service/`)
 
-The swarm currently dials candidates in the order the tracker handed them over, which makes locality a tracker-side ranking and nothing more. Phase 6 makes the peer act on it.
+Phase 5 answered decision A — *which chunk next* — with rarest-first. Phase 6 answers decision B: *which peer to ask*. The swarm currently dials candidates in whatever order the tracker handed them over, so locality is a tracker-side ranking and nothing the agent acts on.
 
-Blueprint backlog (§16) with its own acceptance tests:
+Blueprint backlog (§16), verbatim tasks with their own acceptance tests:
 
 | Step | Job | Acceptance |
 | --- | --- | --- |
-| P6-01 | Locality-aware peer selection in the agent | Same-site candidates are preferred over same-group, and same-group over the rest |
-| P6-02 | `capabilities` / `uploadBudget` on announce | The tracker carries a capacity hint the agent can rank on (§10.3) |
-| P6-03 | LAPS scoring | Locality, availability, and capacity combine into one score; the weights are config, not code |
-| P6-04 | Endgame duplicate requests + CANCEL | The last few blocks are asked for twice; the loser is cancelled, not waited on |
-| P6-05 | B2/B3 scenarios | Locality-on versus locality-off runs, same asset hash from both |
+| P6-01 | Site/network-group config | Tracker and peers expose a locality class without `/24` hard-coding |
+| P6-02 | EWMA RTT / goodput measurement | Per-peer state updates only from observed transfer or ping data |
+| P6-03 | LAPS score implementation | Tests cover normalization, missing metrics, tie-breaking, weight config |
+| P6-04 | Endgame duplicate + cancel | Tail blocks may go to at most two sources; the extra copy is cancelled |
+| P6-05 | B1/B2/B3 experiment configs | Same assets, seeds, and network profiles, so only the scheduler changes |
+
+The score is fixed by §8.2 and is deliberately explainable rather than learned:
+
+```
+peerScore = wL*locality + wT*throughput + wR*rtt + wC*capacity + wH*health
+            wL=0.35  wT=0.30  wR=0.15  wC=0.10  wH=0.10   (defaults, not claimed optimal)
+```
+
+`locality` is 1.0 for the same network group, 0.7 for the same site, 0.2 for a remote site. `throughput` is EWMA goodput normalized within the current candidate set, `rtt` is inverse-normalized EWMA RTT, `capacity` is `1 - normalized activeUploadLoad`, and `health` is recent success against timeouts and protocol failures. Weights are configuration because the paper has to sensitivity-test them; a weight baked into code is not a variable.
+
+Two rules that matter more than the formula. A metric is only written from something observed — a completed transfer or a PONG — never from a number a peer asserts about itself, or the score becomes a self-report. And LAPS reorders sources; it never overrides verification. A chunk from the best-scoring peer in the swarm is still refused if its hash is wrong.
 
 ## Carried forward (not blocking Phase 6)
 
