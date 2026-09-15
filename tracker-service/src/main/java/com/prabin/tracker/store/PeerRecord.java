@@ -1,6 +1,7 @@
 package com.prabin.tracker.store;
 
 import com.prabin.swarmedge.common.id.PeerId;
+import com.prabin.swarmedge.common.locality.Locality;
 
 import java.util.Objects;
 
@@ -21,6 +22,11 @@ public record PeerRecord(
         Objects.requireNonNull(networkGroupId, "networkGroupId");
         Objects.requireNonNull(bits, "bits");
         bits = bits.clone();
+    }
+
+    /** The two labels as one value, so ranking never re-pairs them by hand. */
+    public Locality locality() {
+        return new Locality(siteId, networkGroupId);
     }
 
     @Override
