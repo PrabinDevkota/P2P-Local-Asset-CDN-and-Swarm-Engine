@@ -252,11 +252,59 @@ class SwarmDownloaderTest {
     void aStallDeadlineShorterThanABlockTimeoutIsRejected() throws Exception {
         Leecher leecher = leecher("leecher");
 
-        assertThatThrownBy(() -> new SwarmDownloader.Settings(assetId, leecher.peerId(), token(),
-                sessionSettings(Duration.ofSeconds(30)), Duration.ofSeconds(5), 4, SEED,
+        assertThatThrownBy(() -> SwarmDownloader.Settings.withoutEndgame(assetId, leecher.peerId(),
+                token(), sessionSettings(Duration.ofSeconds(30)), Duration.ofSeconds(5), 4, SEED,
                 Duration.ofSeconds(10)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must be longer than the block timeout");
+    }
+
+    @Test
+    void anEndgameSwarmRebuildsTheSameAssetAsOneWithout() throws Exception {
+        // The endgame spends a duplicate block to stop the tail being decided by the
+        // slowest peer. What it must not change is the result.
+        List<InetSocketAddress> seeders = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            seeders.add(seederWithEverything("seeder-" + i));
+        }
+
+        Leecher leecher = leecher("leecher");
+        SwarmDownloader.Settings settings = new SwarmDownloader.Settings(assetId, leecher.peerId(),
+                token(), sessionSettings(Duration.ofSeconds(5)), Duration.ofSeconds(5), 4, SEED,
+                Duration.ofSeconds(30), 8);
+
+        await(swarm(leecher, settings).start(seeders));
+
+        assertThat(leecher.inventory().complete()).isTrue();
+        assertThatRebuiltAssetMatches(leecher);
+    }
+
+    @Test
+    void anEndgameCostsDuplicateBlocksAndNeverDuplicateBytesOnDisk() throws Exception {
+        List<InetSocketAddress> seeders = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            seeders.add(seederWithEverything("seeder-" + i));
+        }
+
+        Leecher leecher = leecher("leecher");
+        // Threshold above the whole asset, so every block is eligible for a second
+        // source: the most duplication the design permits.
+        SwarmDownloader.Settings settings = new SwarmDownloader.Settings(assetId, leecher.peerId(),
+                token(), sessionSettings(Duration.ofSeconds(5)), Duration.ofSeconds(5), 4, SEED,
+                Duration.ofSeconds(30), (int) blocksInTheAsset() * 2);
+
+        await(swarm(leecher, settings).start(seeders));
+
+        long blocksServed = servers.stream()
+                .mapToLong(server -> server.lastSession().map(session -> session.blocksSent()).orElse(0L))
+                .sum();
+
+        // Duplicates are extra, so the seeders may serve more than the asset...
+        assertThat(blocksServed).isGreaterThanOrEqualTo(blocksInTheAsset());
+        // ...but never more than two copies of it, which is the §8.3 ceiling.
+        assertThat(blocksServed).isLessThanOrEqualTo(2 * blocksInTheAsset());
+        // ...and the asset on disk is the asset, not two of it.
+        assertThatRebuiltAssetMatches(leecher);
     }
 
     @Test
@@ -318,8 +366,14 @@ class SwarmDownloaderTest {
 
     private SwarmDownloader swarm(Leecher leecher, int maxPeers, Duration blockTimeout,
                                   Duration stallTimeout) {
-        SwarmDownloader.Settings settings = new SwarmDownloader.Settings(assetId, leecher.peerId(),
-                token(), sessionSettings(blockTimeout), Duration.ofSeconds(5), maxPeers, SEED, stallTimeout);
+        // These are the Phase 5 cases, so no endgame: exactly one source per block.
+        SwarmDownloader.Settings settings = SwarmDownloader.Settings.withoutEndgame(assetId,
+                leecher.peerId(), token(), sessionSettings(blockTimeout), Duration.ofSeconds(5),
+                maxPeers, SEED, stallTimeout);
+        return swarm(leecher, settings);
+    }
+
+    private SwarmDownloader swarm(Leecher leecher, SwarmDownloader.Settings settings) {
         SwarmDownloader swarm = new SwarmDownloader(settings, leecher.inventory(), leecher.assembler());
         swarms.add(swarm);
         return swarm;
