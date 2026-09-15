@@ -6,13 +6,17 @@ import com.prabin.swarmedge.peer.chunk.ChunkInventory;
 import com.prabin.swarmedge.manifest.ChunkEntry;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.IntPredicate;
 
 /**
@@ -24,6 +28,17 @@ import java.util.function.IntPredicate;
  * have already verified. And chunk choice is rarest-first across everyone we are
  * connected to, not first-come order, so the scarce bytes spread before the common ones.
  *
+ * <p>The exception is the endgame (P6-04). Near the end there are fewer blocks left than
+ * peers to ask, so idle peers pile up behind whichever straggler holds the last block —
+ * one slow peer sets the finish time no matter how fast everyone else was. Once the
+ * queue is down to {@code endgameThreshold} blocks, a block may go to a second peer as
+ * well, and the first copy to arrive cancels the other. It costs one duplicate block of
+ * bandwidth to stop the tail being decided by the worst peer in the swarm.
+ *
+ * <p>Two sources, never three. The cost is bounded on purpose: duplicating to everybody
+ * would turn the tail of every transfer into a broadcast, which is the failure mode that
+ * makes naive endgame handling worse than none.
+ *
  * <p>Each session works through {@link #viewFor(int, int)}, which is the per-session
  * {@link BlockSource}. The view exists so a session can only give back what it holds:
  * releasing another session's lease would let one misbehaving peer stall the swarm.
@@ -33,30 +48,72 @@ import java.util.function.IntPredicate;
  */
 public final class SwarmScheduler {
 
+    /** §8.3 caps endgame duplication at two sources for one block. */
+    public static final int MAX_SOURCES_PER_BLOCK = 2;
+
+    /** No duplication at all, which is the Phase 5 behaviour and baselines B1 and B2. */
+    public static final int NO_ENDGAME = 0;
+
     private final ChunkInventory inventory;
     private final ChunkAvailability availability;
     private final int blockSize;
+    private final int endgameThreshold;
+    private final DuplicateCanceller canceller;
 
     /** Blocks nobody is fetching yet, by chunk. A chunk with no entry is not wanted. */
     private final Map<Integer, Deque<BlockPlan.Block>> unleased = new LinkedHashMap<>();
-    private final Map<BlockPlan.Block, Integer> leases = new HashMap<>();
+
+    /** Who is fetching each block. More than one holder only happens in the endgame. */
+    private final Map<BlockPlan.Block, Set<Integer>> leases = new HashMap<>();
+
+    /** Blocks whose bytes have landed. Not worth duplicating, and not worth cancelling. */
+    private final Set<BlockPlan.Block> delivered = new HashSet<>();
 
     private long progress;
 
+    /** No endgame: every block goes to exactly one peer, as in Phase 5. */
     public SwarmScheduler(ChunkInventory inventory, ChunkAvailability availability, int blockSize) {
+        this(inventory, availability, blockSize, NO_ENDGAME, DuplicateCanceller.NONE);
+    }
+
+    /**
+     * @param endgameThreshold how few blocks must remain before a block may go to a
+     *                         second peer; {@link #NO_ENDGAME} disables it
+     * @param canceller        how the loser of a duplicated block is called off, which
+     *                         the scheduler cannot do itself because it holds no sockets
+     */
+    public SwarmScheduler(ChunkInventory inventory, ChunkAvailability availability, int blockSize,
+                          int endgameThreshold, DuplicateCanceller canceller) {
         this.inventory = Objects.requireNonNull(inventory, "inventory");
         this.availability = Objects.requireNonNull(availability, "availability");
+        this.canceller = Objects.requireNonNull(canceller, "canceller");
         if (blockSize <= 0) {
             throw new IllegalArgumentException("blockSize must be positive");
+        }
+        if (endgameThreshold < 0) {
+            throw new IllegalArgumentException("endgameThreshold cannot be negative");
         }
         if (availability.chunkCount() != inventory.chunkCount()) {
             throw new IllegalArgumentException("availability covers " + availability.chunkCount()
                     + " chunks but the manifest has " + inventory.chunkCount());
         }
         this.blockSize = blockSize;
+        this.endgameThreshold = endgameThreshold;
         for (int chunkIndex : inventory.missing()) {
             unleased.put(chunkIndex, blocksOf(chunkIndex));
         }
+    }
+
+    /**
+     * How the scheduler reaches back into a session to cancel a duplicate it no longer
+     * needs. The scheduler owns queue state, not connections, so the owner supplies this.
+     */
+    @FunctionalInterface
+    public interface DuplicateCanceller {
+
+        DuplicateCanceller NONE = (sessionId, block) -> { };
+
+        void cancel(int sessionId, BlockPlan.Block block);
     }
 
     public int blockSize() {
@@ -87,6 +144,28 @@ public final class SwarmScheduler {
 
     public synchronized int leasedBlocks() {
         return leases.size();
+    }
+
+    /** How many peers are fetching one block: 1 normally, 2 at most in the endgame. */
+    public synchronized int sourcesFor(BlockPlan.Block block) {
+        Set<Integer> holders = leases.get(Objects.requireNonNull(block, "block"));
+        return holders == null ? 0 : holders.size();
+    }
+
+    /** Blocks currently going to more than one peer, which is the endgame's whole cost. */
+    public synchronized int duplicatedBlocks() {
+        int duplicated = 0;
+        for (Set<Integer> holders : leases.values()) {
+            if (holders.size() > 1) {
+                duplicated++;
+            }
+        }
+        return duplicated;
+    }
+
+    /** True once the queue is short enough for a block to be worth insuring (§8.3). */
+    public synchronized boolean inEndgame() {
+        return endgameThreshold != NO_ENDGAME && !isDone() && pendingBlocks() <= endgameThreshold;
     }
 
     /** True when no block is waiting and none is being fetched: the asset is done. */
@@ -125,32 +204,105 @@ public final class SwarmScheduler {
             if (blocks.isEmpty()) {
                 unleased.remove(chunkIndex);
             }
-            leases.put(block, sessionId);
-            progress++;
+            hold(sessionId, block);
             return Optional.of(block);
+        }
+        // Nothing unclaimed. Normally this peer just waits; in the endgame it is worth
+        // asking it for something another peer is already slow at.
+        return duplicateForEndgame(sessionId, remoteHasChunk);
+    }
+
+    /**
+     * Find a block worth asking a second peer for.
+     *
+     * <p>Only near the end, only blocks with exactly one source so far, and never one
+     * whose bytes have already landed. Rarest-first order still applies: if two
+     * stragglers are outstanding, the scarcer chunk is the one worth insuring.
+     */
+    private Optional<BlockPlan.Block> duplicateForEndgame(int sessionId, IntPredicate remoteHasChunk) {
+        if (endgameThreshold == NO_ENDGAME || pendingBlocks() > endgameThreshold) {
+            return Optional.empty();
+        }
+        for (int chunkIndex : availability.rarestFirst(remoteHasChunk::test)) {
+            for (BlockPlan.Block block : leases.keySet()) {
+                if (block.chunkIndex() != chunkIndex || delivered.contains(block)) {
+                    continue;
+                }
+                Set<Integer> holders = leases.get(block);
+                if (holders.size() >= MAX_SOURCES_PER_BLOCK || holders.contains(sessionId)) {
+                    continue;
+                }
+                hold(sessionId, block);
+                return Optional.of(block);
+            }
         }
         return Optional.empty();
     }
 
+    private void hold(int sessionId, BlockPlan.Block block) {
+        leases.computeIfAbsent(block, key -> new LinkedHashSet<>()).add(sessionId);
+        progress++;
+    }
+
+    /**
+     * These bytes landed. Any other peer still fetching the same block is called off,
+     * which is the second half of P6-04: first arrival wins and the loser is cancelled
+     * rather than waited on.
+     *
+     * <p>The winner keeps its lease. A block is only truly finished when its chunk
+     * verifies, and until then a session that dies must still hand its work back.
+     */
+    private void complete(int sessionId, BlockPlan.Block block) {
+        Objects.requireNonNull(block, "block");
+        List<Integer> losers = new ArrayList<>();
+        synchronized (this) {
+            Set<Integer> holders = leases.get(block);
+            if (holders == null || !holders.contains(sessionId)) {
+                // Already settled, restarted, or never ours: nothing to call off.
+                return;
+            }
+            delivered.add(block);
+            for (Integer holder : holders) {
+                if (holder != sessionId) {
+                    losers.add(holder);
+                }
+            }
+            holders.removeAll(losers);
+        }
+        // Outside the lock: cancelling hops onto another session's event loop, and a
+        // lock held across sessions is a lock two event loops can wait on.
+        for (int loser : losers) {
+            canceller.cancel(loser, block);
+        }
+    }
+
     private synchronized void release(int sessionId, BlockPlan.Block block) {
         Objects.requireNonNull(block, "block");
-        Integer holder = leases.get(block);
-        if (holder == null || holder != sessionId) {
+        Set<Integer> holders = leases.get(block);
+        if (holders == null || !holders.remove(sessionId)) {
             // Not ours to give back. Either it was already returned, or its chunk has
             // since verified and the block no longer exists.
             return;
         }
-        leases.remove(block);
-        unleased.computeIfAbsent(block.chunkIndex(), index -> new ArrayDeque<>()).addFirst(block);
+        if (holders.isEmpty()) {
+            requeueUnheld(block);
+        }
+        // Otherwise the other endgame source is still on it, so the block is not idle.
     }
 
     private synchronized void surrender(int sessionId) {
         for (BlockPlan.Block block : List.copyOf(leases.keySet())) {
-            if (leases.get(block) == sessionId) {
-                leases.remove(block);
-                unleased.computeIfAbsent(block.chunkIndex(), index -> new ArrayDeque<>()).addFirst(block);
+            Set<Integer> holders = leases.get(block);
+            if (holders != null && holders.remove(sessionId) && holders.isEmpty()) {
+                requeueUnheld(block);
             }
         }
+    }
+
+    private void requeueUnheld(BlockPlan.Block block) {
+        leases.remove(block);
+        delivered.remove(block);
+        unleased.computeIfAbsent(block.chunkIndex(), index -> new ArrayDeque<>()).addFirst(block);
     }
 
     /**
@@ -162,15 +314,20 @@ public final class SwarmScheduler {
             // Another session already produced a verified copy; nothing to rebuild.
             return;
         }
-        leases.keySet().removeIf(block -> block.chunkIndex() == chunkIndex);
+        forgetChunk(chunkIndex);
         unleased.put(chunkIndex, blocksOf(chunkIndex));
     }
 
     /** A chunk verified into the store, so it leaves the queue for good. */
     private synchronized void settle(int chunkIndex) {
         unleased.remove(chunkIndex);
-        leases.keySet().removeIf(block -> block.chunkIndex() == chunkIndex);
+        forgetChunk(chunkIndex);
         progress++;
+    }
+
+    private void forgetChunk(int chunkIndex) {
+        leases.keySet().removeIf(block -> block.chunkIndex() == chunkIndex);
+        delivered.removeIf(block -> block.chunkIndex() == chunkIndex);
     }
 
     private Deque<BlockPlan.Block> blocksOf(int chunkIndex) {
@@ -209,6 +366,11 @@ public final class SwarmScheduler {
         @Override
         public void requeue(BlockPlan.Block block) {
             release(sessionId, block);
+        }
+
+        @Override
+        public void completed(BlockPlan.Block block) {
+            complete(sessionId, block);
         }
 
         @Override
