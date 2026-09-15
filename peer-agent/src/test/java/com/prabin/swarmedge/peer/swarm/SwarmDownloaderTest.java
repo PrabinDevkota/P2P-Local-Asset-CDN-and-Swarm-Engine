@@ -32,6 +32,7 @@ import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -217,12 +218,62 @@ class SwarmDownloaderTest {
         InetSocketAddress empty = seederHolding("empty");
 
         Leecher leecher = leecher("leecher");
-        CompletableFuture<SwarmDownloader.Result> asset = swarm(leecher, 1).start(List.of(empty));
+        CompletableFuture<SwarmDownloader.Result> asset =
+                swarm(leecher, 1, Duration.ofMillis(300), Duration.ofSeconds(1)).start(List.of(empty));
 
-        // It stays connected and idle rather than pretending to be done.
-        assertThatThrownBy(() -> asset.get(2, TimeUnit.SECONDS))
-                .isInstanceOf(java.util.concurrent.TimeoutException.class);
+        // The peer is alive and answering, so nothing else would ever end this. The
+        // swarm has to notice that a living peer is not a useful one.
+        assertThatThrownBy(() -> await(asset))
+                .hasMessageContaining("swarm stalled")
+                .hasMessageContaining("no connected peer holds chunks");
         assertThat(leecher.inventory().complete()).isFalse();
+    }
+
+    @Test
+    void theStallReportNamesTheChunksNobodyCouldSupply() throws Exception {
+        // One peer, holding all but the last two chunks: the swarm gets most of the way
+        // and then has nowhere to go, which is the case a bare timeout would not explain.
+        int lastChunk = chunkCount() - 1;
+        InetSocketAddress partial = seederHolding("partial",
+                IntStream.range(0, lastChunk - 1).toArray());
+
+        Leecher leecher = leecher("leecher");
+        CompletableFuture<SwarmDownloader.Result> asset =
+                swarm(leecher, 1, Duration.ofMillis(300), Duration.ofSeconds(1)).start(List.of(partial));
+
+        assertThatThrownBy(() -> await(asset))
+                .hasMessageContaining("no connected peer holds chunks ["
+                        + (lastChunk - 1) + ", " + lastChunk + "]");
+        // What it did manage to fetch is verified and kept; a stall is not a rollback.
+        assertThat(leecher.inventory().missing()).containsExactly(lastChunk - 1, lastChunk);
+    }
+
+    @Test
+    void aStallDeadlineShorterThanABlockTimeoutIsRejected() throws Exception {
+        Leecher leecher = leecher("leecher");
+
+        assertThatThrownBy(() -> new SwarmDownloader.Settings(assetId, leecher.peerId(), token(),
+                sessionSettings(Duration.ofSeconds(30)), Duration.ofSeconds(5), 4, SEED,
+                Duration.ofSeconds(10)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must be longer than the block timeout");
+    }
+
+    @Test
+    void aSlowSwarmIsNotMistakenForADeadOne() throws Exception {
+        // Each peer holds one chunk, so completion needs every one of them and the run
+        // takes a while. The stall deadline is short but progress keeps resetting it.
+        List<InetSocketAddress> seeders = new ArrayList<>();
+        for (int chunkIndex = 0; chunkIndex < chunkCount(); chunkIndex++) {
+            seeders.add(seederHolding("seeder-" + chunkIndex, chunkIndex));
+        }
+
+        Leecher leecher = leecher("leecher");
+        await(swarm(leecher, chunkCount(), Duration.ofMillis(500), Duration.ofSeconds(2))
+                .start(seeders));
+
+        assertThat(leecher.inventory().complete()).isTrue();
+        assertThatRebuiltAssetMatches(leecher);
     }
 
     @Test
@@ -261,16 +312,22 @@ class SwarmDownloaderTest {
     }
 
     private SwarmDownloader swarm(Leecher leecher, int maxPeers) {
+        // Generous stall deadline: these runs are meant to finish, not to trip it.
+        return swarm(leecher, maxPeers, Duration.ofSeconds(5), Duration.ofSeconds(30));
+    }
+
+    private SwarmDownloader swarm(Leecher leecher, int maxPeers, Duration blockTimeout,
+                                  Duration stallTimeout) {
         SwarmDownloader.Settings settings = new SwarmDownloader.Settings(assetId, leecher.peerId(),
-                token(), sessionSettings(), Duration.ofSeconds(5), maxPeers, SEED);
+                token(), sessionSettings(blockTimeout), Duration.ofSeconds(5), maxPeers, SEED, stallTimeout);
         SwarmDownloader swarm = new SwarmDownloader(settings, leecher.inventory(), leecher.assembler());
         swarms.add(swarm);
         return swarm;
     }
 
-    private static LeecherHandler.Settings sessionSettings() {
+    private static LeecherHandler.Settings sessionSettings(Duration blockTimeout) {
         // Eight outstanding requests per peer is the blueprint's B1 pipeline depth.
-        return new LeecherHandler.Settings(BLOCK_SIZE, 8, Duration.ofSeconds(5), 3, Duration.ofSeconds(5));
+        return new LeecherHandler.Settings(BLOCK_SIZE, 8, blockTimeout, 3, Duration.ofSeconds(5));
     }
 
     private Leecher leecher(String name) throws Exception {

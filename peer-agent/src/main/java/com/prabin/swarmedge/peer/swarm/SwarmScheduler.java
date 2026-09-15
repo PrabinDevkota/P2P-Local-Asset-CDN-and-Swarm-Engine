@@ -41,6 +41,8 @@ public final class SwarmScheduler {
     private final Map<Integer, Deque<BlockPlan.Block>> unleased = new LinkedHashMap<>();
     private final Map<BlockPlan.Block, Integer> leases = new HashMap<>();
 
+    private long progress;
+
     public SwarmScheduler(ChunkInventory inventory, ChunkAvailability availability, int blockSize) {
         this.inventory = Objects.requireNonNull(inventory, "inventory");
         this.availability = Objects.requireNonNull(availability, "availability");
@@ -97,6 +99,18 @@ public final class SwarmScheduler {
         return List.copyOf(unleased.keySet());
     }
 
+    /**
+     * A counter that rises whenever the swarm actually moves: a block was handed to a
+     * peer, or a chunk verified. It says nothing about how much moved, only that
+     * something did, which is what an owner needs to tell a slow swarm from a wedged one.
+     *
+     * <p>Two situations look identical from the queue alone — every peer is busy, and no
+     * peer holds anything we want — and only this counter separates them.
+     */
+    public synchronized long progress() {
+        return progress;
+    }
+
     private synchronized Optional<BlockPlan.Block> lease(int sessionId, IntPredicate remoteHasChunk) {
         Objects.requireNonNull(remoteHasChunk, "remoteHasChunk");
         // Scarcest first, but only chunks this peer holds and that still have work left.
@@ -112,6 +126,7 @@ public final class SwarmScheduler {
                 unleased.remove(chunkIndex);
             }
             leases.put(block, sessionId);
+            progress++;
             return Optional.of(block);
         }
         return Optional.empty();
@@ -155,6 +170,7 @@ public final class SwarmScheduler {
     private synchronized void settle(int chunkIndex) {
         unleased.remove(chunkIndex);
         leases.keySet().removeIf(block -> block.chunkIndex() == chunkIndex);
+        progress++;
     }
 
     private Deque<BlockPlan.Block> blocksOf(int chunkIndex) {
