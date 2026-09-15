@@ -82,6 +82,7 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
     private int chunksStored;
     private int hashMismatches;
     private int blocksIgnoredAsLate;
+    private int duplicatesCancelled;
 
     /** One peer, one queue: this session is the only source of what is missing. */
     public LeecherHandler(AssetId assetId, PeerId localPeerId, byte[] token, ChunkInventory inventory,
@@ -119,6 +120,11 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
 
     public long blocksIgnoredAsLate() {
         return blocksIgnoredAsLate;
+    }
+
+    /** Endgame duplicates this session was told to stop fetching (P6-04). */
+    public int duplicatesCancelled() {
+        return duplicatesCancelled;
     }
 
     @Override
@@ -237,6 +243,40 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
     }
 
     /**
+     * Stop fetching a block another peer already delivered (P6-04, §8.3).
+     *
+     * <p>Called from the winning session's thread, so the work hops onto ours. A block
+     * whose payload is already arriving is left alone: those bytes are about to land at
+     * the same offset with the same contents, and abandoning them mid-stream would cost
+     * more than it saves.
+     */
+    public void cancelBlock(BlockPlan.Block block) {
+        Objects.requireNonNull(block, "block");
+        ChannelHandlerContext ctx = context;
+        if (ctx == null) {
+            return;
+        }
+        onEventLoop(ctx, () -> {
+            if (!session.state().transfersData()) {
+                return;
+            }
+            InFlight arriving = current;
+            if (arriving != null && arriving.chunkIndex() == block.chunkIndex()
+                    && arriving.blockOffset() == block.blockOffset()) {
+                return;
+            }
+            tracker.findBySpan(block.chunkIndex(), block.blockOffset(), block.blockLength())
+                    .ifPresent(request -> {
+                        tracker.cancel(request.requestId());
+                        ctx.writeAndFlush(Messages.cancel(request.requestId()).frame());
+                        duplicatesCancelled++;
+                        // The budget just freed up, so ask for something still wanted.
+                        requestMore(ctx);
+                    });
+        });
+    }
+
+    /**
      * Tell this peer we finished a chunk, so it can ask us for it. Safe to call from
      * another session's thread; the write is hopped onto this one.
      */
@@ -347,6 +387,9 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
         }
         tracker.complete(end.requestId());
         bytesReceived += end.blockLength();
+        // These bytes are ours, so any second peer fetching the same block can stop.
+        plan.completed(new BlockPlan.Block(
+                finished.chunkIndex(), finished.blockOffset(), end.blockLength()));
 
         int chunkIndex = finished.chunkIndex();
         pendingCommits++;

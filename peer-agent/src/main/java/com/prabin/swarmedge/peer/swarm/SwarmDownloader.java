@@ -2,6 +2,7 @@ package com.prabin.swarmedge.peer.swarm;
 
 import com.prabin.swarmedge.common.id.AssetId;
 import com.prabin.swarmedge.common.id.PeerId;
+import com.prabin.swarmedge.peer.chunk.BlockPlan;
 import com.prabin.swarmedge.peer.chunk.ChunkAssembler;
 import com.prabin.swarmedge.peer.chunk.ChunkInventory;
 import com.prabin.swarmedge.peer.net.LeecherClient;
@@ -76,7 +77,8 @@ public final class SwarmDownloader implements AutoCloseable {
         this.inventory = Objects.requireNonNull(inventory, "inventory");
         this.assembler = Objects.requireNonNull(assembler, "assembler");
         this.availability = new ChunkAvailability(inventory.chunkCount(), settings.tieBreakSeed());
-        this.scheduler = new SwarmScheduler(inventory, availability, settings.session().blockSize());
+        this.scheduler = new SwarmScheduler(inventory, availability, settings.session().blockSize(),
+                settings.endgameThreshold(), this::cancelDuplicate);
         this.client = new LeecherClient();
         this.watchdog = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "swarm-watchdog");
@@ -186,6 +188,21 @@ public final class SwarmDownloader implements AutoCloseable {
         LeecherHandler handler = client.open(seeder, request);
         sessions.put(sessionId, handler);
         handler.completion().whenComplete((result, failure) -> onSessionEnded(sessionId, seeder, failure));
+    }
+
+    /**
+     * A block arrived from somewhere else, so this session can stop fetching it (P6-04).
+     * The scheduler decides which session loses; it holds no sockets, so this is how the
+     * decision reaches one.
+     */
+    private void cancelDuplicate(int sessionId, BlockPlan.Block block) {
+        LeecherHandler session;
+        synchronized (this) {
+            session = sessions.get(sessionId);
+        }
+        if (session != null) {
+            session.cancelBlock(block);
+        }
     }
 
     /** A chunk verified. Tell every other peer, then see whether we are finished. */
@@ -309,9 +326,12 @@ public final class SwarmDownloader implements AutoCloseable {
     /**
      * @param maxPeers     how many sessions run at once; the blueprint's B1 figure is 8
      * @param tieBreakSeed fixes the order among equally rare chunks so a run can be replayed
-     * @param stallTimeout how long the whole swarm may make no progress at all before it
-     *                     is called dead; must outlast a block timeout, or one slow block
-     *                     would look like a stall
+     * @param stallTimeout     how long the whole swarm may make no progress at all before
+     *                         it is called dead; must outlast a block timeout, or one slow
+     *                         block would look like a stall
+     * @param endgameThreshold how few blocks must remain before one may be asked of a
+     *                         second peer; {@link SwarmScheduler#NO_ENDGAME} turns it off,
+     *                         which is baselines B1 and B2
      */
     public record Settings(
             AssetId assetId,
@@ -321,7 +341,16 @@ public final class SwarmDownloader implements AutoCloseable {
             Duration connectTimeout,
             int maxPeers,
             long tieBreakSeed,
-            Duration stallTimeout) {
+            Duration stallTimeout,
+            int endgameThreshold) {
+
+        /** Phase 5 behaviour: one source per block, all the way to the last one. */
+        public static Settings withoutEndgame(AssetId assetId, PeerId peerId, byte[] token,
+                                              LeecherHandler.Settings session, Duration connectTimeout,
+                                              int maxPeers, long tieBreakSeed, Duration stallTimeout) {
+            return new Settings(assetId, peerId, token, session, connectTimeout, maxPeers,
+                    tieBreakSeed, stallTimeout, SwarmScheduler.NO_ENDGAME);
+        }
 
         public Settings {
             Objects.requireNonNull(assetId, "assetId");
@@ -337,6 +366,9 @@ public final class SwarmDownloader implements AutoCloseable {
                 throw new IllegalArgumentException("stallTimeout " + stallTimeout
                         + " must be longer than the block timeout " + session.blockTimeout()
                         + ", otherwise a single slow block is read as a dead swarm");
+            }
+            if (endgameThreshold < 0) {
+                throw new IllegalArgumentException("endgameThreshold cannot be negative");
             }
         }
 
