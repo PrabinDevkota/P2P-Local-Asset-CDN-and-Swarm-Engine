@@ -1,5 +1,6 @@
 package com.prabin.swarmedge.benchmark;
 
+import com.prabin.swarmedge.peer.laps.LapsWeights;
 import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.SafeConstructor;
@@ -11,19 +12,27 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
- * Parsed form of a B1 scenario file such as {@code research/configs/b1-basic-swarm.yaml}.
+ * Parsed form of a swarm scenario file (blueprint P5-04, P6-05).
+ *
+ * <p>One shape for three baselines. B1, B2, and B3 differ only in their
+ * {@code scheduler} section, which is what lets the comparison between them mean
+ * something: if the asset, the seed, or the pipeline depth moved as well, any difference
+ * in the results would have more than one possible cause and the experiment would not
+ * isolate the scheduler at all.
  *
  * <p>A config describes an experiment; it never describes an expected result. Every
  * field here is an input that has to be preserved with the run so the run can be
  * recreated (blueprint §13.3, §19.1), including the seed that fixes the rarest-first
- * tie-break and which peers are killed for churn.
+ * tie-break, the LAPS tie-break, and which peers are killed for churn.
  */
-public record B1ScenarioConfig(
+public record SwarmScenarioConfig(
         String scenarioId,
         String baseline,
         String productId,
@@ -43,11 +52,39 @@ public record B1ScenarioConfig(
         Duration connectTimeout,
         Duration stallTimeout,
         int maxAttemptsPerBlock,
+        SourcePolicy sourcePolicy,
+        LapsWeights lapsWeights,
+        int endgameThresholdBlocks,
         List<Double> killFractions,
         boolean everyPeerHoldsEverything
 ) {
 
-    public B1ScenarioConfig {
+    /**
+     * How a run picks which peer to ask, which is the only thing that separates the
+     * three baselines (§8.1 decision B).
+     */
+    public enum SourcePolicy {
+
+        /** B1: dial in whatever order discovery returned. No source preference at all. */
+        AS_DISCOVERED,
+
+        /** B2: nearest first and nothing else, so LAPS has a locality-only control. */
+        LOCALITY_ONLY,
+
+        /** B3: the full §8.2 score, locality plus the measured terms. */
+        LAPS;
+
+        /** The weights this policy implies, or empty when it does not score at all. */
+        public Optional<LapsWeights> impliedWeights() {
+            return switch (this) {
+                case AS_DISCOVERED -> Optional.empty();
+                case LOCALITY_ONLY -> Optional.of(LapsWeights.localityOnly());
+                case LAPS -> Optional.of(LapsWeights.defaults());
+            };
+        }
+    }
+
+    public SwarmScenarioConfig {
         requireText(scenarioId, "scenarioId");
         requireText(baseline, "baseline");
         requireText(productId, "asset.productId");
@@ -76,6 +113,19 @@ public record B1ScenarioConfig(
             throw new IllegalArgumentException("swarm.stallTimeoutMillis must outlast swarm.blockTimeoutMillis,"
                     + " or one slow block reads as a dead swarm");
         }
+        Objects.requireNonNull(sourcePolicy, "scheduler.sourcePolicy");
+        if (endgameThresholdBlocks < 0) {
+            throw new IllegalArgumentException("scheduler.endgameThresholdBlocks cannot be negative");
+        }
+        if (sourcePolicy == SourcePolicy.AS_DISCOVERED && lapsWeights != null) {
+            throw new IllegalArgumentException("scheduler.lapsWeights has no meaning under "
+                    + SourcePolicy.AS_DISCOVERED + "; a baseline that does not score peers must"
+                    + " not carry weights, or a run record implies a policy it did not use");
+        }
+        if (sourcePolicy != SourcePolicy.AS_DISCOVERED && lapsWeights == null) {
+            throw new IllegalArgumentException("scheduler.sourcePolicy " + sourcePolicy
+                    + " needs scheduler.lapsWeights");
+        }
         if (killFractions.isEmpty()) {
             throw new IllegalArgumentException("churn.killFractions must list at least one share");
         }
@@ -95,14 +145,14 @@ public record B1ScenarioConfig(
         return Math.min(seederCount - 1, (int) Math.floor(seederCount * fraction));
     }
 
-    public static B1ScenarioConfig load(Path file) throws IOException {
+    public static SwarmScenarioConfig load(Path file) throws IOException {
         Objects.requireNonNull(file, "file");
         try (Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
             return parse(reader);
         }
     }
 
-    static B1ScenarioConfig parse(Reader reader) {
+    static SwarmScenarioConfig parse(Reader reader) {
         Map<String, Object> root = safeYaml().load(reader);
         if (root == null) {
             throw new IllegalArgumentException("scenario file is empty");
@@ -110,8 +160,10 @@ public record B1ScenarioConfig(
         Map<String, Object> asset = section(root, "asset");
         Map<String, Object> run = section(root, "run");
         Map<String, Object> swarm = section(root, "swarm");
+        Map<String, Object> scheduler = section(root, "scheduler");
         Map<String, Object> churn = section(root, "churn");
-        return new B1ScenarioConfig(
+        SourcePolicy policy = policy(scheduler);
+        return new SwarmScenarioConfig(
                 string(root, "scenarioId"),
                 string(root, "baseline"),
                 string(asset, "productId"),
@@ -131,8 +183,56 @@ public record B1ScenarioConfig(
                 millis(swarm, "connectTimeoutMillis"),
                 millis(swarm, "stallTimeoutMillis"),
                 (int) number(swarm, "maxAttemptsPerBlock"),
+                policy,
+                weights(scheduler, policy),
+                (int) number(scheduler, "endgameThresholdBlocks"),
                 fractions(churn, "killFractions"),
                 bool(churn, "everyPeerHoldsEverything"));
+    }
+
+    private static SourcePolicy policy(Map<String, Object> scheduler) {
+        String name = string(scheduler, "sourcePolicy");
+        try {
+            return SourcePolicy.valueOf(name);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("scheduler.sourcePolicy must be one of "
+                    + Arrays.toString(SourcePolicy.values()) + ", got " + name, e);
+        }
+    }
+
+    /**
+     * Weights are spelled out in the file rather than taken from the policy name. A run
+     * record that only said "LAPS" would not say which weights produced it, and the
+     * whole point of a sensitivity sweep is that they vary.
+     */
+    private static LapsWeights weights(Map<String, Object> scheduler, SourcePolicy policy) {
+        Object value = scheduler.get("lapsWeights");
+        if (value == null) {
+            return policy == SourcePolicy.AS_DISCOVERED ? null : defaultWeightsFor(policy);
+        }
+        if (!(value instanceof Map<?, ?> map)) {
+            throw new IllegalArgumentException("scheduler.lapsWeights must be a mapping");
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> weights = (Map<String, Object>) map;
+        return new LapsWeights(
+                fraction(weights, "locality"),
+                fraction(weights, "throughput"),
+                fraction(weights, "rtt"),
+                fraction(weights, "capacity"),
+                fraction(weights, "health"));
+    }
+
+    private static LapsWeights defaultWeightsFor(SourcePolicy policy) {
+        return policy.impliedWeights().orElseThrow();
+    }
+
+    private static double fraction(Map<String, Object> map, String key) {
+        Object value = map.get(key);
+        if (!(value instanceof Number n)) {
+            throw new IllegalArgumentException("scheduler.lapsWeights." + key + " must be a number");
+        }
+        return n.doubleValue();
     }
 
     /** Scenario files are repository content, but a loader that can build arbitrary classes is not. */

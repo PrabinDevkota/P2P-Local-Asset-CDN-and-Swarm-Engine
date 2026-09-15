@@ -31,7 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>No throughput or offload number is asserted. Those are outcomes of a measured run,
  * not properties of the code.
  */
-class B1RunnerTest {
+class SwarmRunnerTest {
 
     private static final int CHUNK_SIZE = 256;
     private static final int BLOCK_SIZE = 64;
@@ -63,20 +63,20 @@ class B1RunnerTest {
 
     @Test
     void everyRepeatRebuildsAByteIdenticalAssetFromTheSwarm() throws Exception {
-        B1Runner.Summary summary = runner(config(2, List.of(0.0))).run(manifest);
+        SwarmRunner.Summary summary = runner(config(2, List.of(0.0))).run(manifest);
 
         assertThat(summary.runs()).hasSize(2);
         assertThat(summary.assetHashesMatch()).isTrue();
         assertThat(summary.assetSha256()).isEqualTo(sha256Hex(original));
         assertThat(summary.scenarioId()).isEqualTo("b1-test");
         assertThat(summary.baseline()).isEqualTo("B1");
-        assertThat(summary.runs()).extracting(B1Runner.RunResult::runId)
+        assertThat(summary.runs()).extracting(SwarmRunner.RunResult::runId)
                 .containsExactly("b1-test-k0-r1", "b1-test-k0-r2");
     }
 
     @Test
     void theAssetIsRebuiltFromPeerBytesOnly() throws Exception {
-        B1Runner.Summary summary = runner(config(1, List.of(0.0))).run(manifest);
+        SwarmRunner.Summary summary = runner(config(1, List.of(0.0))).run(manifest);
 
         assertThat(summary.runs()).allSatisfy(run -> {
             assertThat(run.assetBytes()).isEqualTo(original.length);
@@ -89,7 +89,7 @@ class B1RunnerTest {
     @Test
     void noSinglePeerCanFinishTheJobSoAllOfThemAreUsed() throws Exception {
         // Each seeder holds only the chunks where chunkIndex % seederCount matches it.
-        B1Runner.Summary summary = runner(config(1, List.of(0.0), false)).run(manifest);
+        SwarmRunner.Summary summary = runner(config(1, List.of(0.0), false)).run(manifest);
 
         assertThat(summary.assetSha256()).isEqualTo(sha256Hex(original));
         assertThat(summary.runs().getFirst().peersDialled()).isEqualTo(4);
@@ -97,41 +97,41 @@ class B1RunnerTest {
 
     @Test
     void killingAShareOfThePeersMidTransferStillRebuildsTheAsset() throws Exception {
-        B1Runner.Summary summary = runner(config(2, List.of(0.0, 0.25))).run(manifest);
+        SwarmRunner.Summary summary = runner(config(2, List.of(0.0, 0.25))).run(manifest);
 
         assertThat(summary.runs()).hasSize(4);
         assertThat(summary.assetHashesMatch()).isTrue();
         assertThat(summary.assetSha256()).isEqualTo(sha256Hex(original));
-        assertThat(summary.runs()).extracting(B1Runner.RunResult::runId)
+        assertThat(summary.runs()).extracting(SwarmRunner.RunResult::runId)
                 .containsExactly("b1-test-k0-r1", "b1-test-k0-r2", "b1-test-k25-r1", "b1-test-k25-r2");
     }
 
     @Test
     void aChurnRunKillsTheSamePeersEveryTimeSoItCanBeReplayed() throws Exception {
-        B1Runner.Summary first = runner(config(1, List.of(0.25)), "work-1").run(manifest);
-        B1Runner.Summary second = runner(config(1, List.of(0.25)), "work-2").run(manifest);
+        SwarmRunner.Summary first = runner(config(1, List.of(0.25)), "work-1").run(manifest);
+        SwarmRunner.Summary second = runner(config(1, List.of(0.25)), "work-2").run(manifest);
 
         assertThat(first.assetSha256()).isEqualTo(second.assetSha256());
         assertThat(first.runs().getFirst().killFraction())
                 .isEqualTo(second.runs().getFirst().killFraction());
     }
 
-    private B1Runner runner(B1ScenarioConfig config) {
+    private SwarmRunner runner(SwarmScenarioConfig config) {
         return runner(config, "work");
     }
 
-    private B1Runner runner(B1ScenarioConfig config, String workName) {
-        return new B1Runner(config, tempDir.resolve(workName), published, assetId);
+    private SwarmRunner runner(SwarmScenarioConfig config, String workName) {
+        return new SwarmRunner(config, tempDir.resolve(workName), published, assetId);
     }
 
-    private static B1ScenarioConfig config(int repetitions, List<Double> killFractions) {
+    private static SwarmScenarioConfig config(int repetitions, List<Double> killFractions) {
         return config(repetitions, killFractions, true);
     }
 
-    private static B1ScenarioConfig config(int repetitions, List<Double> killFractions,
+    private static SwarmScenarioConfig config(int repetitions, List<Double> killFractions,
                                            boolean everyPeerHoldsEverything) {
         String shares = killFractions.toString();
-        return B1ScenarioConfig.parse(new StringReader("""
+        return SwarmScenarioConfig.parse(new StringReader("""
                 scenarioId: b1-test
                 baseline: B1
                 asset:
@@ -154,6 +154,9 @@ class B1RunnerTest {
                   connectTimeoutMillis: 2000
                   stallTimeoutMillis: 20000
                   maxAttemptsPerBlock: 3
+                scheduler:
+                  sourcePolicy: AS_DISCOVERED
+                  endgameThresholdBlocks: 0
                 churn:
                   killFractions: %s
                   everyPeerHoldsEverything: %s

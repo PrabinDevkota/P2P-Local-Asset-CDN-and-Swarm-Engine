@@ -34,7 +34,15 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
- * Baseline B1: rebuild one asset from a swarm and record what each run cost.
+ * Baselines B1, B2, and B3: rebuild one asset from a swarm and record what each run cost.
+ *
+ * <p>Which baseline it is comes entirely from the scenario's {@code scheduler} section.
+ * The runner is the same code in all three cases, which is the point — if each baseline
+ * had its own runner, a difference in the numbers could be a difference in the harness.
+ *
+ * <p>Seeders here are all on loopback, so their locality labels are assigned by the
+ * scenario rather than discovered from a tracker: the agent has no announce loop yet. A
+ * B2 or B3 run therefore exercises the source policy, not discovery.
  *
  * <p>The runner measures; it does not judge. It asserts nothing about throughput or
  * origin offload, and the only correctness claim it makes is the blueprint's: every
@@ -46,11 +54,11 @@ import java.util.concurrent.TimeoutException;
  * others. Which peers get killed comes from the scenario seed, so a churn run is as
  * replayable as a clean one.
  */
-public final class B1Runner {
+public final class SwarmRunner {
 
-    private static final Logger log = LoggerFactory.getLogger(B1Runner.class);
+    private static final Logger log = LoggerFactory.getLogger(SwarmRunner.class);
 
-    private final B1ScenarioConfig config;
+    private final SwarmScenarioConfig config;
     private final Path workDir;
     private final Path sourceFile;
     private final AssetId assetId;
@@ -59,7 +67,7 @@ public final class B1Runner {
      * @param sourceFile the published asset, used to stock the seeders; a real swarm
      *                   would have fetched these chunks from origin first
      */
-    public B1Runner(B1ScenarioConfig config, Path workDir, Path sourceFile, AssetId assetId) {
+    public SwarmRunner(SwarmScenarioConfig config, Path workDir, Path sourceFile, AssetId assetId) {
         this.config = Objects.requireNonNull(config, "config");
         this.workDir = Objects.requireNonNull(workDir, "workDir");
         this.sourceFile = Objects.requireNonNull(sourceFile, "sourceFile");
@@ -176,7 +184,8 @@ public final class B1Runner {
                 config.maxAttemptsPerBlock(),
                 config.handshakeTimeout());
         return new SwarmDownloader.Settings(assetId, leecherPeerId(), token(), session,
-                config.connectTimeout(), config.maxPeers(), config.seed(), config.stallTimeout());
+                config.connectTimeout(), config.maxPeers(), config.seed(), config.stallTimeout(),
+                config.endgameThresholdBlocks());
     }
 
     private static byte[] token() {

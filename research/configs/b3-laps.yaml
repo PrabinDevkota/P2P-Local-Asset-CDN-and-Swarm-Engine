@@ -1,9 +1,9 @@
-# Baseline B1: rarest-first swarm, many peers, fixed request pipeline.
-# The comparison point for B0 (origin-only). Nothing here is a target or a claim;
+# Baseline B3: the same swarm as B1 and B2, choosing sources with the full LAPS score.
+# This is the configuration the paper is about. Nothing here is a target or a claim;
 # numbers come out of a run, they do not go into a config.
-scenarioId: b1-basic-swarm
-baseline: B1
-description: One leecher rebuilds one immutable asset from several peers over protocol v1.
+scenarioId: b3-laps
+baseline: B3
+description: One leecher rebuilds one immutable asset, choosing peers by LAPS score.
 
 asset:
   productId: game-x
@@ -16,8 +16,9 @@ asset:
 run:
   # Three repeats, same acceptance test as B0: same asset hash every time.
   repetitions: 3
-  # Fixes chunk contents, the rarest-first tie-break, and which peers are killed
-  # for churn, so a published run can be replayed exactly.
+  # Identical to b1 and b2 on purpose. A different seed would change the chunk
+  # contents, the rarest-first tie-break, the LAPS tie-break, and which peers get
+  # killed, and then B3 against B2 would not be a comparison of scheduling.
   seed: 20260914
   coldCache: true
 
@@ -43,10 +44,19 @@ swarm:
 # stay identical across the three files, or a difference in the results would have more
 # than one possible cause and the comparison would not isolate the scheduler.
 scheduler:
-  # Dial in whatever order discovery returned: no source preference to measure against.
-  sourcePolicy: AS_DISCOVERED
-  # No endgame duplication either, so B1 is the plain rarest-first swarm.
-  endgameThresholdBlocks: 0
+  sourcePolicy: LAPS
+  # §8.2's suggested engineering defaults, and explicitly not claimed optimal.
+  # These are the numbers a sensitivity sweep varies, which is the reason they are
+  # written here instead of compiled into the scorer.
+  lapsWeights:
+    locality: 0.35
+    throughput: 0.30
+    rtt: 0.15
+    capacity: 0.10
+    health: 0.10
+  # P6-04: once this few blocks remain, one may go to a second peer so the tail is
+  # not decided by the slowest peer in the swarm. 16 blocks is four 4 MiB chunks.
+  endgameThresholdBlocks: 16
 
 churn:
   # P5-05 smoke: kill this share of the seeders mid-transfer and expect the swarm

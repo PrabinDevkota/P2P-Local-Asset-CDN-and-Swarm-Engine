@@ -1,9 +1,10 @@
-# Baseline B1: rarest-first swarm, many peers, fixed request pipeline.
-# The comparison point for B0 (origin-only). Nothing here is a target or a claim;
-# numbers come out of a run, they do not go into a config.
-scenarioId: b1-basic-swarm
-baseline: B1
-description: One leecher rebuilds one immutable asset from several peers over protocol v1.
+# Baseline B2: the same swarm as B1, choosing sources by locality alone.
+# The control for B3. It exists to answer one question: how much of LAPS is just
+# knowing where the peers are? Nothing here is a target or a claim; numbers come
+# out of a run, they do not go into a config.
+scenarioId: b2-locality
+baseline: B2
+description: One leecher rebuilds one immutable asset, preferring the nearest peers.
 
 asset:
   productId: game-x
@@ -16,8 +17,9 @@ asset:
 run:
   # Three repeats, same acceptance test as B0: same asset hash every time.
   repetitions: 3
-  # Fixes chunk contents, the rarest-first tie-break, and which peers are killed
-  # for churn, so a published run can be replayed exactly.
+  # Identical to b1 on purpose. A different seed would change the chunk contents,
+  # the rarest-first tie-break, and which peers get killed, and then B2 against B1
+  # would not be a comparison of scheduling.
   seed: 20260914
   coldCache: true
 
@@ -43,9 +45,17 @@ swarm:
 # stay identical across the three files, or a difference in the results would have more
 # than one possible cause and the comparison would not isolate the scheduler.
 scheduler:
-  # Dial in whatever order discovery returned: no source preference to measure against.
-  sourcePolicy: AS_DISCOVERED
-  # No endgame duplication either, so B1 is the plain rarest-first swarm.
+  # Nearest peer first, and nothing else considered.
+  sourcePolicy: LOCALITY_ONLY
+  # Spelled out even though the policy implies them, so a run record says which
+  # weights produced it rather than only naming a policy.
+  lapsWeights:
+    locality: 1.0
+    throughput: 0.0
+    rtt: 0.0
+    capacity: 0.0
+    health: 0.0
+  # Endgame stays off, so B2 against B1 isolates source choice and nothing else.
   endgameThresholdBlocks: 0
 
 churn:
