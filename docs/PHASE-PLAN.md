@@ -47,7 +47,7 @@ From §8.3, the pipeline rules that hold: a block is never scheduled twice in no
 
 Rules carried forward: no blocking hash, file, or SQLite work on a Netty event loop; a chunk is advertised only after it verifies; the request budget stays the memory budget.
 
-## Phase 6 — Locality + LAPS (`common/`, `peer-agent/`, `tracker-service/`)
+## Phase 6 — Locality + LAPS (`common/`, `peer-agent/`, `tracker-service/`) — complete
 
 Phase 5 answered decision A — *which chunk next* — with rarest-first. Phase 6 answers decision B: *which peer to ask*. The swarm currently dials candidates in whatever order the tracker handed them over, so locality is a tracker-side ranking and nothing the agent acts on.
 
@@ -72,7 +72,22 @@ peerScore = wL*locality + wT*throughput + wR*rtt + wC*capacity + wH*health
 
 Two rules that matter more than the formula. A metric is only written from something observed — a completed transfer or a PONG — never from a number a peer asserts about itself, or the score becomes a self-report. And LAPS reorders sources; it never overrides verification. A chunk from the best-scoring peer in the swarm is still refused if its hash is wrong.
 
-## Carried forward (not blocking Phase 6)
+All five are done. What remains is integration rather than design: nothing records into `PeerMetrics` from a live session yet, so a B3 run currently scores on locality alone and matches B2. Closing that is the first task of the next stage, ahead of any Phase 7 work, because until it is closed the B2-against-B3 comparison has nothing to compare.
+
+## Phase 7 — Persistent cache and cross-version reuse (`peer-agent/`, `manifest-tool/`)
+
+Blueprint backlog (§16):
+
+| Step | Job | Acceptance |
+| --- | --- | --- |
+| P7-01 | Cache lookup before network | A verified local chunk satisfies a request with no network bytes |
+| P7-02 | LRU / quota / min-free-space eviction | Pinned or referenced chunks are not evicted incorrectly |
+| P7-03 | Warm-start inventory | An agent restart rebuilds its bitfield from the cache index and files |
+| P7-04 | B4 warm-cache experiment | Peer and origin byte accounting shows reuse, with no invented target |
+
+The store and its SQLite index already exist from P1-04; what is missing is the policy that uses them. `refCount` and `lastAccess` are recorded but nothing acts on either, so the cache currently grows without bound.
+
+## Carried forward (not blocking Phase 7)
 
 These are blueprint items whose phase is closed but which later phases assume.
 
@@ -86,7 +101,6 @@ These are blueprint items whose phase is closed but which later phases assume.
 
 ## Later (do not pull forward)
 
-- Phase 7 persistent cache B4, eviction, warm start
 - Phase 8 EDGE role + progressive fallback with jitter
 - Phase 9 security hardening (sequence/rollback, reputation, log audit)
 - Phase 10 experiment harness; Phase 11 FastCDC; Phase 12 release

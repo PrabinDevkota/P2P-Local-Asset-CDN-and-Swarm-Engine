@@ -78,7 +78,7 @@ Not covered in this phase: the token in HELLO is carried but not verified (`Peer
 - [x] P5-01 `ChunkAvailability`: BITFIELD on join and HAVE mid-session, both folded into one holder count per chunk
 - [x] P5-02 Rarest-first selection with a seeded tie-break, so an even swarm still replays in the same order
 - [x] P5-03 `SwarmScheduler`: one shared block queue behind a per-session `BlockSource` view, 8 outstanding per peer
-- [x] P5-04 `B1Runner` + `research/configs/b1-basic-swarm.yaml`: eight seeders, repeats agree on the asset hash
+- [x] P5-04 `SwarmRunner` + `research/configs/b1-basic-swarm.yaml`: eight seeders, repeats agree on the asset hash
 - [x] P5-05 Churn smoke at 10 % and 25 %: killed peers' blocks are re-queued and the swarm still finishes
 
 Phase 4 proved one connection; Phase 5 is about the choices that only exist once there are many. Availability is counted, not guessed: a peer contributes its whole bitfield when it joins, single chunks as it announces them, and takes all of it back when it drops. Selection asks for the scarcest wanted chunk first, and ties break on a seed rather than on map order.
@@ -87,10 +87,37 @@ No block is handed to two peers at once. A block is leased to one session, and c
 
 Churn is the interesting case and it is the one that is tested: peers are killed mid-transfer, their in-flight work is redistributed, and the run still produces the manifest's asset hash. Which peers die comes from the scenario seed, so a churn run is as replayable as a clean one. A swarm whose survivors no longer cover every chunk fails rather than hangs.
 
-Not covered in this phase: endgame duplicate requests and cancel (P6-04), locality-aware peer choice (Phase 6 — the swarm currently dials candidates in the order the tracker gave them), and per-swarm global byte caps beyond the per-peer budget.
+Not covered in this phase: per-swarm global byte caps beyond the per-peer budget.
+
+Found and fixed on review of this phase:
+
+- A swarm with living peers that held none of the remaining chunks sat connected and idle forever. Nothing timed out, because nothing was in flight; nobody disconnected; the queue never drained. `ChunkAvailability.reachable` had been written for exactly this case and was never called from anywhere but a test. There is now a stall deadline, and the failure names the chunks no peer could supply instead of reporting a bare timeout.
+- The old test for that case asserted the hang — it waited two seconds and treated the timeout as correct behaviour.
+
+## Phase 6 — Locality + LAPS — done
+
+- [x] P6-01 `Locality` / `LocalityClass` in `common/`, shared by the tracker's ranker and the agent's scorer
+- [x] P6-02 `PeerMetrics`: EWMA goodput and RTT plus a success ratio, written only from observed data
+- [x] P6-03 `LapsScorer` + `LapsWeights` + `PeerSelector`: the §8.2 score, its five terms, and the dial order it produces
+- [x] P6-04 Endgame duplicate to at most two sources with a CANCEL for the loser
+- [x] P6-05 `research/configs/b1-basic-swarm.yaml`, `b2-locality.yaml`, `b3-laps.yaml`: identical but for the scheduler
+
+Phase 5 answered *which chunk next*. Phase 6 answers *which peer to ask*, and the two are deliberately separate: rarest-first still decides the chunk, and LAPS only decides where to get it.
+
+Locality is two administrative labels, `siteId` and `networkGroupId`, and never an address. A network group belongs to one site, so same-group is the stronger claim and is checked first. This turned up a real bug: the tracker's ranker tested site before group, so a peer across the building tied with one on the same switch and the tie fell through to peer id. The finest distinction available was being discarded on every discovery call.
+
+Every metric is measured. Goodput comes from a block that arrived, RTT from a PONG or a block's turnaround, health from attempts that worked against ones that did not. Nothing a peer asserts about itself is recorded, with one declared exception: `activeUploadLoad` cannot be observed from here, so it is the peer's own claim, and §8.2 gives capacity the smallest weight for that reason.
+
+Two design choices worth stating because they are not obvious. Normalizing within the current candidate set, as §8.2 requires, makes a score relative to a peer's alternatives rather than an absolute rating — the fastest peer in a slow swarm scores 1.0 on throughput, because there is nothing else to say. And a peer with no samples gets a neutral term rather than zero: zero would rank a new peer below one already measured as hopeless, so it would never be asked and never earn the metrics that might clear it.
+
+The endgame exists for the tail, not the average. Near the end there is less work left than there are peers, so idle peers queue behind whichever straggler holds the last block. Below the threshold a block may go to a second peer and the first arrival cancels the other. Two is a hard ceiling: duplicating to everybody turns the tail of every transfer into a broadcast.
+
+LAPS reorders sources and grants nothing. Every byte from the best-scoring peer is still hashed against the signed manifest, and no score exempts anyone.
+
+Not covered in this phase: the agent has no tracker announce loop, so a B2 or B3 run gets its locality labels from the scenario rather than from discovery — the source policy is exercised, discovery is not. The `capabilities` / `uploadBudget` announce fields are still absent from the tracker (§10.1), so `advertisedUploadLoad` has no wire path yet. The window stays fixed at 8 outstanding requests; §8.3's "shrink or expand once the baseline is stable" is not implemented. And nothing yet feeds `PeerMetrics` from a live session — the selector holds the history, but wiring the recording into `LeecherHandler` is what makes a B3 run differ from a B2 one in practice.
 
 ## Not started
 
-- Phases 6–12 as in the blueprint
+- Phases 7–12 as in the blueprint
 
 Peers must call `ManifestVerifier` with a trusted public key. `ManifestJson.parse` only checks JSON shape.

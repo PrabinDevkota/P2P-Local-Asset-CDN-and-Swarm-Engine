@@ -8,7 +8,7 @@ This is an engineering system and a research testbed. The first paper focuses on
 
 ## Status
 
-Phases **0–5 are done** against the blueprint backlog. `./mvnw verify` is the gate and is green. **Phase 6** (locality + LAPS, baselines B2/B3) is next.
+Phases **0–6 are done** against the blueprint backlog. `./mvnw verify` is the gate and is green. **Phase 7** (persistent cache, eviction, warm start, baseline B4) is next.
 
 | Phase | State | What it is |
 | --- | --- | --- |
@@ -18,7 +18,8 @@ Phases **0–5 are done** against the blueprint backlog. `./mvnw verify` is the 
 | 3 | Done | Tracker phone book: short-lived peer tokens, announce, ranked candidates, 250-record load test. No file bytes |
 | 4 | Done | Two peers over Netty: HELLO → BITFIELD → REQUEST/BLOCK → hash the whole chunk → `putVerified`. Fuzz and bounds suites included |
 | 5 | Done | Baseline B1: dial up to 8 peers, rarest-first over counted availability, one shared block queue, HAVE broadcast, churn smoke |
-| 6 | Next | Locality-aware selection, LAPS scoring, endgame duplicates, baselines B2/B3 |
+| 6 | Done | Shared locality classes, EWMA goodput/RTT, LAPS scoring and dial order, endgame duplicates, configs for B1/B2/B3 |
+| 7 | Next | Cache lookup before network, LRU/quota eviction, warm-start inventory, baseline B4 |
 | 7+ | Later | Persistent cache, EDGE, progressive fallback, experiment harness |
 
 Trust rules that must not drift:
@@ -34,7 +35,7 @@ Checklist and phase ticks: [docs/STATUS.md](docs/STATUS.md). File-by-file plan: 
 1. **Trust ≠ transfer.** The signed manifest says *what* bytes are valid. Peers only move bytes. The tracker only answers “who nearby?”
 2. **Control plane ≠ data plane.** `tracker-service/` (Spring Boot + Redis) is the phone book. `peer-agent/` (Netty) moves blocks over protocol v1.
 3. **Chunk ≠ block.** A **chunk** (default 4 MiB) is hashed with SHA-256 and is the only unit stored or seeded. A **block** (default 256 KiB) is a network piece *inside* a chunk. Blocks are not trusted one-by-one; the **whole chunk** must match the manifest hash.
-4. **Locality is policy, not `/24`.** Peers carry `siteId` + `networkGroupId`. The tracker ranks same site first, then same network group, then everyone else (limit 20).
+4. **Locality is policy, not `/24`.** Peers carry `siteId` + `networkGroupId`. A network group belongs to one site, so same group ranks above same site, which ranks above a remote site (limit 20). The tracker and the agent share one `Locality` type so they cannot disagree about the same pair of peers.
 5. **Measure, don’t promise.** Offload % and Mbps are experiment outcomes — not SLOs in this README.
 
 ## How a 4 MiB slice is judged good
@@ -129,7 +130,7 @@ Redis key: `swarm:{assetId}:peers` (HASH). Field = `peerId`. Per-field TTL **45s
 
 A token for a different peer, or one claiming a locality it was not issued for, is a 401. Tokens gate the control plane; they never authorize content. Set `swarmedge.tracker.token-secret` per deployment — an empty value generates a random secret at startup, so tokens will not survive a restart.
 
-Carried forward from blueprint §10: Actuator health/Prometheus, announce rate limits, `GET /api/v1/assets/{assetId}/manifest`, and `capabilities` / `uploadBudget` fields for Phase 6 LAPS.
+Carried forward from blueprint §10: Actuator health/Prometheus, announce rate limits, `GET /api/v1/assets/{assetId}/manifest`, and the `capabilities` / `uploadBudget` fields LAPS would read a capacity hint from.
 
 ## Peer-to-peer transfer (implemented)
 
@@ -168,9 +169,9 @@ Not yet: the token in HELLO is carried but not verified, and a partly received c
 - **A failed chunk is rebuilt, not patched.** A partly-poisoned staging file is not worth trusting, so the whole chunk goes back to the queue and can be fetched from someone else. This is what Phase 4 could not do.
 - **A verified chunk is announced immediately.** HAVE goes to every other connected session, so a leecher becomes useful to the swarm before it has finished.
 
-`B1Runner` in `benchmark-runner/` runs this from `research/configs/b1-basic-swarm.yaml`: eight loopback seeders, three repeats, and a churn sweep that kills 10 % and 25 % of them mid-transfer. Every repetition must rebuild a byte-identical asset. Which peers die comes from the seed, so a churn run is as replayable as a clean one. A swarm whose survivors no longer cover every chunk fails rather than hangs.
+`SwarmRunner` in `benchmark-runner/` runs this from `research/configs/b1-basic-swarm.yaml`: eight loopback seeders, three repeats, and a churn sweep that kills 10 % and 25 % of them mid-transfer. Every repetition must rebuild a byte-identical asset. Which peers die comes from the seed, so a churn run is as replayable as a clean one. A swarm whose survivors no longer cover every chunk fails rather than hangs.
 
-Not yet: candidates are dialled in the order the tracker gave them rather than by locality, there are no endgame duplicate requests, and the byte cap is per peer rather than per swarm.
+Not yet: the byte cap is per peer rather than per swarm.
 
 ## Wire protocol v1
 
@@ -200,8 +201,8 @@ No CHOKE/UNCHOKE in the MVP. Upload uses **device upload budget / backpressure**
 
 Two stages, kept separate for experiments:
 
-- **A — which chunk/block?** Rarest-first baseline — **done** (`ChunkAvailability` + `SwarmScheduler`). Endgame urgency is P6-04.
-- **B — which source?** Locality-only (B2) then **LAPS** (B3) — Phase 6.
+- **A — which chunk/block?** Rarest-first with a seeded tie-break, plus endgame duplication to at most two sources — **done** (`ChunkAvailability` + `SwarmScheduler`).
+- **B — which source?** Locality-only (B2) and **LAPS** (B3) — **done** (`LapsScorer` + `PeerSelector`). Nothing records into `PeerMetrics` from a live session yet, so a real run still scores on locality alone.
 
 Source priority (later): local verified cache → healthy local peers → same-site EDGE → limited origin.
 

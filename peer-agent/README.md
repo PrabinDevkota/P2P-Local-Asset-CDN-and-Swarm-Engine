@@ -39,7 +39,7 @@ A connection that never reaches ACTIVE is dropped on a handshake deadline, on bo
 | Piece | Job |
 | --- | --- |
 | `ChunkAvailability` | How many connected peers hold each chunk, and the rarest-first order over what we still want |
-| `SwarmScheduler` | The shared queue; leases a block to exactly one session and takes it back on timeout, failure, or death |
+| `SwarmScheduler` | The shared queue; leases a block to one session — two in the endgame — and takes it back on timeout, failure, or death |
 | `BlockSource` | What a session sees of the queue — `BlockPlan` for one peer, a scheduler view for a swarm |
 | `SessionEvents` | How a `LeecherHandler` reports a remote bitfield, a remote HAVE, or a chunk it just stored |
 
@@ -49,6 +49,26 @@ Choices the swarm makes, and why:
 - **One block, one peer.** A leased block is not offered to anyone else. It returns to the queue when a request times out, when the session drops, or when the chunk fails its hash — none of which touches a chunk that already verified.
 - **A failed chunk is rebuilt, not patched.** A partly-poisoned staging file is not worth trusting, so the whole chunk goes back to the queue.
 - **A HAVE we send is not a favour.** A chunk we verify is announced to every other connected session, which is what makes a leecher useful to the swarm before it has finished.
+- **A living peer is not a useful one.** A swarm whose connected peers hold none of the remaining chunks would otherwise sit idle forever: nothing is in flight to time out, and nobody disconnects. A stall deadline ends it, and the failure names the chunks nobody could supply.
+
+## Source choice and the endgame (Phase 6)
+
+Rarest-first decides *which chunk*. LAPS decides *which peer*, and the two stay separate on purpose.
+
+| Piece | Job |
+| --- | --- |
+| `Locality` / `LocalityClass` (in `common/`) | Same network group, same site, or remote — from labels, never from a `/24` |
+| `PeerMetrics` | EWMA goodput and RTT plus a success ratio, written only from what we observed |
+| `LapsWeights` | The five §8.2 weights, required to sum to 1 so runs with different weights stay comparable |
+| `LapsScorer` | One score per peer and the five terms behind it, so a ranking can be explained |
+| `PeerSelector` | Holds the metric history across sessions and turns a flat candidate list into a dial order |
+
+- **Every metric is measured.** Goodput comes from a block that arrived, RTT from a PONG or a block's turnaround, health from attempts that worked against ones that did not. The one exception is declared: how loaded another peer's uplink is cannot be seen from here, so `advertisedUploadLoad` is that peer's own claim — which is why §8.2 gives capacity the smallest weight.
+- **A score is relative, not absolute.** Throughput, latency, and capacity are normalized within the candidate set being ranked right now, so the fastest peer in a slow swarm scores 1.0. There is nothing else available to say.
+- **An unmeasured peer is neutral, not bad.** Scoring a new peer zero would rank it below one already known to be hopeless, so it would never be asked and never earn the metrics that might clear it.
+- **Ties break on a seed, not on peer id.** Ordering by id looks deterministic and is quietly biased: the same peers would win every tie in every run, so a low id would behave like a scheduling advantage and show up in the results as one.
+- **Two sources at the tail, never three.** Below `endgameThreshold` blocks a block may go to a second peer and the first arrival cancels the other, so one straggler cannot set the finish time. Duplicating to everybody would turn the tail of every transfer into a broadcast.
+- **LAPS grants nothing.** It reorders sources. Bytes from the top-scoring peer are hashed against the signed manifest exactly like everyone else's.
 
 Rules worth remembering when editing this module:
 
@@ -56,4 +76,6 @@ Rules worth remembering when editing this module:
 - A BLOCK is only accepted against a request we issued, with matching chunk, offset, and length. Late data is dropped quietly; unsolicited data closes the connection.
 - A chunk is advertised only after it verifies. Staging bytes are never visible to `ChunkInventory`.
 
-Not wired yet: `SwarmNode` still has no CLI to point a seeder at a manifest, the token in HELLO is carried but not verified (`PeerAuthPolicy` is where that lands), candidates are dialled in the order the tracker gave them rather than by locality (Phase 6), and there are no endgame duplicate requests (P6-04).
+Not wired yet: `SwarmNode` still has no CLI to point a seeder at a manifest, and the token in HELLO is carried but not verified (`PeerAuthPolicy` is where that lands).
+
+The gap to close first: nothing records into `PeerMetrics` from a live session. `PeerSelector` keeps the history and `LeecherHandler` knows when a block landed, but the two are not connected, so a real run scores on locality alone and B3 behaves like B2. Everything else about LAPS is built and tested; this is the wire that makes it mean something.
