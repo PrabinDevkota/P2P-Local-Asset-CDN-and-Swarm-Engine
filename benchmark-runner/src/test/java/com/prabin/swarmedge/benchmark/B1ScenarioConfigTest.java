@@ -30,7 +30,16 @@ class B1ScenarioConfigTest {
         assertThat(config.outstandingRequestsPerPeer()).isEqualTo(8);
         assertThat(config.blockSizeBytes()).isEqualTo(256 * 1024);
         assertThat(config.blockTimeout()).isEqualTo(Duration.ofSeconds(30));
+        assertThat(config.stallTimeout()).isEqualTo(Duration.ofSeconds(120));
         assertThat(config.killFractions()).containsExactly(0.0, 0.10, 0.25);
+    }
+
+    @Test
+    void aStallDeadlineThatCouldFireDuringOneSlowBlockIsRejected() {
+        assertThatThrownBy(() -> B1ScenarioConfig.parse(new StringReader(minimal().replace(
+                "  stallTimeoutMillis: 20000", "  stallTimeoutMillis: 5000"))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must outlast swarm.blockTimeoutMillis");
     }
 
     @Test
@@ -147,6 +156,7 @@ class B1ScenarioConfigTest {
                   blockTimeoutMillis: 5000
                   handshakeTimeoutMillis: 5000
                   connectTimeoutMillis: 2000
+                  stallTimeoutMillis: 20000
                   maxAttemptsPerBlock: 3
                 churn:
                   killFractions: [0.0, 0.10, 0.25]

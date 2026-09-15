@@ -152,6 +152,7 @@ class B1RunnerTest {
                   blockTimeoutMillis: 5000
                   handshakeTimeoutMillis: 5000
                   connectTimeoutMillis: 2000
+                  stallTimeoutMillis: 20000
                   maxAttemptsPerBlock: 3
                 churn:
                   killFractions: %s

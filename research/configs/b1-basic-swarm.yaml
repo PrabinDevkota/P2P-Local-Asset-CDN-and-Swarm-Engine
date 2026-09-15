@@ -33,6 +33,10 @@ swarm:
   blockTimeoutMillis: 30000
   handshakeTimeoutMillis: 10000
   connectTimeoutMillis: 5000
+  # A swarm can be alive and still unable to finish: peers connected and answering, but
+  # none of them holding what is left. Nothing else ends that, so it ends here. Must
+  # outlast blockTimeoutMillis, or one slow block would read as a dead swarm.
+  stallTimeoutMillis: 120000
   maxAttemptsPerBlock: 3
 
 churn:

@@ -176,7 +176,7 @@ public final class B1Runner {
                 config.maxAttemptsPerBlock(),
                 config.handshakeTimeout());
         return new SwarmDownloader.Settings(assetId, leecherPeerId(), token(), session,
-                config.connectTimeout(), config.maxPeers(), config.seed());
+                config.connectTimeout(), config.maxPeers(), config.seed(), config.stallTimeout());
     }
 
     private static byte[] token() {

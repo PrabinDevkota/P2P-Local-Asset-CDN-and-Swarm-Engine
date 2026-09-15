@@ -41,6 +41,7 @@ public record B1ScenarioConfig(
         Duration blockTimeout,
         Duration handshakeTimeout,
         Duration connectTimeout,
+        Duration stallTimeout,
         int maxAttemptsPerBlock,
         List<Double> killFractions,
         boolean everyPeerHoldsEverything
@@ -63,12 +64,17 @@ public record B1ScenarioConfig(
         Objects.requireNonNull(blockTimeout, "swarm.blockTimeoutMillis");
         Objects.requireNonNull(handshakeTimeout, "swarm.handshakeTimeoutMillis");
         Objects.requireNonNull(connectTimeout, "swarm.connectTimeoutMillis");
+        Objects.requireNonNull(stallTimeout, "swarm.stallTimeoutMillis");
         killFractions = List.copyOf(Objects.requireNonNull(killFractions, "churn.killFractions"));
         if (fileName.contains("/") || fileName.contains("\\") || fileName.contains("..")) {
             throw new IllegalArgumentException("asset.fileName must be a plain name");
         }
         if (blockSizeBytes > chunkSizeBytes) {
             throw new IllegalArgumentException("swarm.blockSizeBytes cannot exceed asset.chunkSizeBytes");
+        }
+        if (stallTimeout.compareTo(blockTimeout) <= 0) {
+            throw new IllegalArgumentException("swarm.stallTimeoutMillis must outlast swarm.blockTimeoutMillis,"
+                    + " or one slow block reads as a dead swarm");
         }
         if (killFractions.isEmpty()) {
             throw new IllegalArgumentException("churn.killFractions must list at least one share");
@@ -123,6 +129,7 @@ public record B1ScenarioConfig(
                 millis(swarm, "blockTimeoutMillis"),
                 millis(swarm, "handshakeTimeoutMillis"),
                 millis(swarm, "connectTimeoutMillis"),
+                millis(swarm, "stallTimeoutMillis"),
                 (int) number(swarm, "maxAttemptsPerBlock"),
                 fractions(churn, "killFractions"),
                 bool(churn, "everyPeerHoldsEverything"));
