@@ -3,12 +3,14 @@ package com.prabin.swarmedge.benchmark;
 import com.prabin.swarmedge.common.id.AssetId;
 import com.prabin.swarmedge.common.id.Hex;
 import com.prabin.swarmedge.common.id.PeerId;
+import com.prabin.swarmedge.common.locality.Locality;
 import com.prabin.swarmedge.manifest.AssetMaterializer;
 import com.prabin.swarmedge.manifest.ChunkEntry;
 import com.prabin.swarmedge.manifest.ChunkStore;
 import com.prabin.swarmedge.manifest.ReleaseManifest;
 import com.prabin.swarmedge.peer.chunk.ChunkAssembler;
 import com.prabin.swarmedge.peer.chunk.ChunkInventory;
+import com.prabin.swarmedge.peer.laps.PeerSelector;
 import com.prabin.swarmedge.peer.net.SeederServer;
 import com.prabin.swarmedge.peer.session.BlockSender;
 import com.prabin.swarmedge.peer.session.LeecherHandler;
@@ -62,6 +64,7 @@ public final class SwarmRunner {
     private final Path workDir;
     private final Path sourceFile;
     private final AssetId assetId;
+    private PeerSelector selector;
 
     /**
      * @param sourceFile the published asset, used to stock the seeders; a real swarm
@@ -99,8 +102,11 @@ public final class SwarmRunner {
             for (int i = 0; i < config.seederCount(); i++) {
                 seeders.add(startSeeder(manifest, runId, i));
             }
-            List<InetSocketAddress> candidates = new ArrayList<>();
-            seeders.forEach(seeder -> candidates.add(seeder.address()));
+            List<PeerSelector.Candidate> candidates = new ArrayList<>();
+            for (int i = 0; i < seeders.size(); i++) {
+                candidates.add(PeerSelector.Candidate.of(
+                        seeders.get(i).address(), seederPeerId(i), seederLocality(i)));
+            }
 
             ChunkStore store = new ChunkStore(storeRoot);
             ChunkInventory inventory = new ChunkInventory(manifest, store);
@@ -108,11 +114,14 @@ public final class SwarmRunner {
 
             long startedAt = System.nanoTime();
             SwarmDownloader.Result result;
+            PeerSelector selector = selectorOrNull();
             try (ChunkAssembler assembler = new ChunkAssembler(inventory, store,
                     workDir.resolve(runId).resolve("staging"));
-                 SwarmDownloader swarm = new SwarmDownloader(swarmSettings(), inventory, assembler)) {
+                 SwarmDownloader swarm = new SwarmDownloader(swarmSettings(), inventory, assembler, selector)) {
 
-                var asset = swarm.start(candidates);
+                var asset = selector == null
+                        ? swarm.start(candidates.stream().map(PeerSelector.Candidate::address).toList())
+                        : swarm.startPreferring(candidates);
                 killPeers(seeders, killFraction, runIndex);
                 result = await(asset);
             }
@@ -187,6 +196,23 @@ public final class SwarmRunner {
         return new SwarmDownloader.Settings(assetId, leecherPeerId(), token(), session,
                 config.connectTimeout(), config.maxPeers(), config.seed(), config.stallTimeout(),
                 config.endgameThresholdBlocks());
+    }
+
+    private PeerSelector selectorOrNull() {
+        if (config.sourcePolicy() == SwarmScenarioConfig.SourcePolicy.AS_DISCOVERED) {
+            return null;
+        }
+        if (selector == null) {
+            selector = new PeerSelector(config.lapsWeights(), config.leecherLocality(), config.seed());
+        }
+        return selector;
+    }
+
+    private Locality seederLocality(int index) {
+        if (config.seederLocalities().isEmpty()) {
+            return new Locality("lab", "default");
+        }
+        return config.seederLocalities().get(index);
     }
 
     private static byte[] token() {
