@@ -15,8 +15,11 @@ import java.util.OptionalDouble;
  * Decides what order to dial candidates in (blueprint P6-01, P6-03, §8.1 decision B).
  *
  * <p>A swarm dials the head of its candidate list and keeps the rest as replacements, so
- * the order of that list <em>is</em> the source policy. This turns a flat list from the
- * tracker into a ranked one, and it is the only place the three baselines differ:
+ * the order of that list <em>is</em> the source policy at connect time. Live sessions
+ * also record into the {@link PeerMetrics} held here, and the scheduler reads those
+ * scores again when leasing a block, so B3 can differ from B2 while everyone is
+ * already connected. The three baselines differ only in whether they use this
+ * selector, and with which weights:
  *
  * <ul>
  *   <li><b>B1</b> — no selector at all; dial in whatever order discovery returned.</li>
