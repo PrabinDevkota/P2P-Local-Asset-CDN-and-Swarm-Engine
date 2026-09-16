@@ -2,6 +2,7 @@ package com.prabin.swarmedge.peer.swarm;
 
 import com.prabin.swarmedge.common.id.AssetId;
 import com.prabin.swarmedge.common.id.PeerId;
+import com.prabin.swarmedge.common.locality.Locality;
 import com.prabin.swarmedge.manifest.AssetMaterializer;
 import com.prabin.swarmedge.manifest.ChunkEntry;
 import com.prabin.swarmedge.manifest.ChunkStore;
@@ -10,6 +11,8 @@ import com.prabin.swarmedge.manifest.ReleaseManifest;
 import com.prabin.swarmedge.manifest.ReleaseManifestFactory;
 import com.prabin.swarmedge.peer.chunk.ChunkAssembler;
 import com.prabin.swarmedge.peer.chunk.ChunkInventory;
+import com.prabin.swarmedge.peer.laps.LapsWeights;
+import com.prabin.swarmedge.peer.laps.PeerSelector;
 import com.prabin.swarmedge.peer.net.SeederServer;
 import com.prabin.swarmedge.peer.session.BlockSender;
 import com.prabin.swarmedge.peer.session.LeecherHandler;
@@ -380,6 +383,35 @@ class SwarmDownloaderTest {
         assertThatRebuiltAssetMatches(leecher);
     }
 
+    @Test
+    void aLiveSwarmRecordsTheBlocksItObservedIntoPeerMetrics() throws Exception {
+        Locality here = new Locality("hq", "floor-2");
+        PeerSelector selector = new PeerSelector(LapsWeights.defaults(), here, SEED);
+        List<PeerSelector.Candidate> candidates = new ArrayList<>();
+        for (int i = 0; i < 2; i++) {
+            PeerId id = PeerId.of(filled((byte) (20 + i), 16));
+            InetSocketAddress address = server(seederStore("metrics-" + i, allChunks()),
+                    BlockSender.Mode.BUFFERED, id).address();
+            candidates.add(PeerSelector.Candidate.of(address, id, here));
+        }
+
+        Leecher leecher = leecher("leecher");
+        SwarmDownloader swarm = new SwarmDownloader(
+                SwarmDownloader.Settings.withoutEndgame(assetId, leecher.peerId(), token(),
+                        sessionSettings(Duration.ofSeconds(5)), Duration.ofSeconds(5), 2, SEED,
+                        Duration.ofSeconds(30)),
+                leecher.inventory(), leecher.assembler(), selector);
+        swarms.add(swarm);
+        await(swarm.startPreferring(candidates));
+
+        long observed = 0;
+        for (PeerSelector.Candidate candidate : candidates) {
+            observed += selector.metricsFor(candidate.peerId()).blocksCompleted();
+        }
+        assertThat(observed).isEqualTo(blocksInTheAsset());
+        assertThatRebuiltAssetMatches(leecher);
+    }
+
     private SwarmDownloader swarm(Leecher leecher, int maxPeers) {
         // Generous stall deadline: these runs are meant to finish, not to trip it.
         return swarm(leecher, maxPeers, Duration.ofSeconds(5), Duration.ofSeconds(30));
@@ -431,8 +463,12 @@ class SwarmDownloaderTest {
     }
 
     private SeederServer server(ChunkStore store, BlockSender.Mode mode) throws Exception {
+        return server(store, mode, PeerId.of(filled((byte) 7, 16)));
+    }
+
+    private SeederServer server(ChunkStore store, BlockSender.Mode mode, PeerId peerId) throws Exception {
         SeederServer server = new SeederServer(SeederServer.Config.of(assetId,
-                PeerId.of(filled((byte) 7, 16)), new ChunkInventory(manifest, store), store, mode, BLOCK_SIZE));
+                peerId, new ChunkInventory(manifest, store), store, mode, BLOCK_SIZE));
         servers.add(server);
         return server;
     }
