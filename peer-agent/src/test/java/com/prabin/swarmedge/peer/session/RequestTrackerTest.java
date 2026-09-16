@@ -217,6 +217,17 @@ class RequestTrackerTest {
         assertThatThrownBy(() -> tracker.issue(0, 0, 0)).isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void anOutstandingRequestRemembersWhenItWasIssued() {
+        now = 1_000;
+        RequestTracker tracker = tracker(4, 1 << 20);
+
+        RequestTracker.Outstanding request = tracker.issue(0, 0, BLOCK);
+
+        assertThat(request.issuedAtNanos()).isEqualTo(1_000L);
+        assertThat(request.deadlineNanos()).isEqualTo(1_000L + TIMEOUT.toNanos());
+    }
+
     private RequestTracker tracker(int maxOutstanding, long maxBytes) {
         return new RequestTracker(maxOutstanding, maxBytes, TIMEOUT, this::clock);
     }
