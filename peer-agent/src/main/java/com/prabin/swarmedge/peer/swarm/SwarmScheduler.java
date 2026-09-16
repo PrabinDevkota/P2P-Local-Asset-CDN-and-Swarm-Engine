@@ -58,6 +58,8 @@ public final class SwarmScheduler {
     private final int blockSize;
     private final int endgameThreshold;
     private final DuplicateCanceller canceller;
+    private final int maxOutstanding;
+    private final SourcePreference preference;
 
     /** Blocks nobody is fetching yet, by chunk. A chunk with no entry is not wanted. */
     private final Map<Integer, Deque<BlockPlan.Block>> unleased = new LinkedHashMap<>();
@@ -83,14 +85,32 @@ public final class SwarmScheduler {
      */
     public SwarmScheduler(ChunkInventory inventory, ChunkAvailability availability, int blockSize,
                           int endgameThreshold, DuplicateCanceller canceller) {
+        this(inventory, availability, blockSize, endgameThreshold, canceller,
+                Integer.MAX_VALUE, SourcePreference.NONE);
+    }
+
+    /**
+     * @param maxOutstanding per-session pipeline depth, used when preferring a better
+     *                       source: a worse peer is skipped only while a better one still
+     *                       has room in its window
+     * @param preference     how to score a session for decision B; {@link SourcePreference#NONE}
+     *                       keeps first-come (baseline B1)
+     */
+    public SwarmScheduler(ChunkInventory inventory, ChunkAvailability availability, int blockSize,
+                          int endgameThreshold, DuplicateCanceller canceller, int maxOutstanding,
+                          SourcePreference preference) {
         this.inventory = Objects.requireNonNull(inventory, "inventory");
         this.availability = Objects.requireNonNull(availability, "availability");
         this.canceller = Objects.requireNonNull(canceller, "canceller");
+        this.preference = Objects.requireNonNull(preference, "preference");
         if (blockSize <= 0) {
             throw new IllegalArgumentException("blockSize must be positive");
         }
         if (endgameThreshold < 0) {
             throw new IllegalArgumentException("endgameThreshold cannot be negative");
+        }
+        if (maxOutstanding <= 0) {
+            throw new IllegalArgumentException("maxOutstanding must be positive");
         }
         if (availability.chunkCount() != inventory.chunkCount()) {
             throw new IllegalArgumentException("availability covers " + availability.chunkCount()
@@ -98,6 +118,7 @@ public final class SwarmScheduler {
         }
         this.blockSize = blockSize;
         this.endgameThreshold = endgameThreshold;
+        this.maxOutstanding = maxOutstanding;
         for (int chunkIndex : inventory.missing()) {
             unleased.put(chunkIndex, blocksOf(chunkIndex));
         }
@@ -121,6 +142,22 @@ public final class SwarmScheduler {
         default void abandon(int sessionId, BlockPlan.Block block) {
             cancel(sessionId, block);
         }
+    }
+
+    /**
+     * Decision B: which session should take the next block of a chunk.
+     *
+     * <p>{@link #NONE} is first-come, which is baseline B1. A real preference scores
+     * higher for a better source (nearer, faster, healthier) so a worse session is
+     * skipped while a better one still has room in its pipeline.
+     */
+    @FunctionalInterface
+    public interface SourcePreference {
+
+        SourcePreference NONE = sessionId -> Double.NaN;
+
+        /** Higher is better. {@link Double#NaN} means this session is not scored. */
+        double score(int sessionId);
     }
 
     public int blockSize() {
@@ -202,6 +239,9 @@ public final class SwarmScheduler {
         // Scarcest first, but only chunks this peer holds and that still have work left.
         for (int chunkIndex : availability.rarestFirst(
                 index -> unleased.containsKey(index) && remoteHasChunk.test(index))) {
+            if (shouldDefer(sessionId, chunkIndex)) {
+                continue;
+            }
             Deque<BlockPlan.Block> blocks = unleased.get(chunkIndex);
             BlockPlan.Block block = blocks.pollFirst();
             if (block == null) {
@@ -217,6 +257,43 @@ public final class SwarmScheduler {
         // Nothing unclaimed. Normally this peer just waits; in the endgame it is worth
         // asking it for something another peer is already slow at.
         return duplicateForEndgame(sessionId, remoteHasChunk);
+    }
+
+    /**
+     * True when a better-scoring connected peer already has this chunk in its pipeline
+     * and still has room for more. Skipping then keeps the better source busy. An idle
+     * better peer (zero leases) is not assumed to be about to ask — that would leave this
+     * session waiting on a handshake that has not happened yet.
+     */
+    private boolean shouldDefer(int sessionId, int chunkIndex) {
+        double mine = preference.score(sessionId);
+        if (Double.isNaN(mine)) {
+            return false;
+        }
+        for (int other : availability.holdersOf(chunkIndex)) {
+            if (other == sessionId) {
+                continue;
+            }
+            double theirs = preference.score(other);
+            if (Double.isNaN(theirs) || theirs <= mine) {
+                continue;
+            }
+            int outstanding = outstandingOf(other);
+            if (outstanding > 0 && outstanding < maxOutstanding) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private int outstandingOf(int sessionId) {
+        int held = 0;
+        for (Set<Integer> holders : leases.values()) {
+            if (holders.contains(sessionId)) {
+                held++;
+            }
+        }
+        return held;
     }
 
     /**
