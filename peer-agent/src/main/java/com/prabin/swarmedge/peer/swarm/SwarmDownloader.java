@@ -5,6 +5,7 @@ import com.prabin.swarmedge.common.id.PeerId;
 import com.prabin.swarmedge.peer.chunk.BlockPlan;
 import com.prabin.swarmedge.peer.chunk.ChunkAssembler;
 import com.prabin.swarmedge.peer.chunk.ChunkInventory;
+import com.prabin.swarmedge.peer.laps.PeerSelector;
 import com.prabin.swarmedge.peer.net.LeecherClient;
 import com.prabin.swarmedge.peer.session.LeecherHandler;
 import com.prabin.swarmedge.peer.session.SessionEvents;
@@ -22,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -48,6 +50,11 @@ import java.util.concurrent.TimeUnit;
  * and idle forever. Waiting until the deadline rather than the moment a chunk looks
  * unreachable is deliberate: a peer that is itself still downloading may announce that
  * chunk a second later, and cancelling a swarm for that would be wrong.
+ *
+ * <p>When a {@link PeerSelector} is supplied, observed block completions feed
+ * {@link com.prabin.swarmedge.peer.laps.PeerMetrics}, and the scheduler prefers a
+ * better-scoring session while that session still has room in its pipeline. Without a
+ * selector the swarm is baseline B1: first-come among peers that hold the chunk.
  */
 public final class SwarmDownloader implements AutoCloseable {
 
@@ -61,7 +68,10 @@ public final class SwarmDownloader implements AutoCloseable {
     private final LeecherClient client;
     private final CompletableFuture<Result> completion = new CompletableFuture<>();
 
+    private final PeerSelector selector;
     private final Map<Integer, LeecherHandler> sessions = new HashMap<>();
+    private final Map<InetSocketAddress, PeerSelector.Candidate> known = new HashMap<>();
+    private final ConcurrentHashMap<Integer, PeerSelector.Candidate> roster = new ConcurrentHashMap<>();
     private final Deque<InetSocketAddress> spares = new ArrayDeque<>();
     private final ScheduledExecutorService watchdog;
 
@@ -73,10 +83,19 @@ public final class SwarmDownloader implements AutoCloseable {
     private ScheduledFuture<?> stallCheck;
 
     public SwarmDownloader(Settings settings, ChunkInventory inventory, ChunkAssembler assembler) {
+        this(settings, inventory, assembler, null);
+    }
+
+    public SwarmDownloader(Settings settings, ChunkInventory inventory, ChunkAssembler assembler,
+                           PeerSelector selector) {
         this.settings = Objects.requireNonNull(settings, "settings");
         this.inventory = Objects.requireNonNull(inventory, "inventory");
         this.assembler = Objects.requireNonNull(assembler, "assembler");
+        this.selector = selector;
         this.availability = new ChunkAvailability(inventory.chunkCount(), settings.tieBreakSeed());
+        SwarmScheduler.SourcePreference preference = selector == null
+                ? SwarmScheduler.SourcePreference.NONE
+                : this::scoreSession;
         this.scheduler = new SwarmScheduler(inventory, availability, settings.session().blockSize(),
                 settings.endgameThreshold(), new SwarmScheduler.DuplicateCanceller() {
                     @Override
@@ -88,7 +107,7 @@ public final class SwarmDownloader implements AutoCloseable {
                     public void abandon(int sessionId, BlockPlan.Block block) {
                         cancelOn(sessionId, block, true);
                     }
-                });
+                }, settings.session().maxOutstanding(), preference);
         this.client = new LeecherClient();
         this.watchdog = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "swarm-watchdog");
@@ -99,10 +118,35 @@ public final class SwarmDownloader implements AutoCloseable {
 
     /**
      * Dial up to {@code maxPeers} of the candidates and start fetching. Any candidates
-     * beyond that are kept as replacements for peers that drop.
+     * beyond that are kept as replacements for peers that drop. Order is as given, which
+     * is baseline B1.
      */
     public synchronized CompletableFuture<Result> start(List<InetSocketAddress> candidates) {
         Objects.requireNonNull(candidates, "candidates");
+        return begin(candidates);
+    }
+
+    /**
+     * Rank {@code candidates} with the selector, then dial. This is baselines B2 and B3:
+     * the order of the list is the source policy, and live block completions update the
+     * same metrics the next lease will read.
+     */
+    public synchronized CompletableFuture<Result> startPreferring(List<PeerSelector.Candidate> candidates) {
+        Objects.requireNonNull(candidates, "candidates");
+        List<PeerSelector.Candidate> order = selector == null
+                ? List.copyOf(candidates)
+                : selector.rank(candidates);
+        for (PeerSelector.Candidate candidate : order) {
+            known.put(candidate.address(), candidate);
+        }
+        List<InetSocketAddress> addresses = new ArrayList<>(order.size());
+        for (PeerSelector.Candidate candidate : order) {
+            addresses.add(candidate.address());
+        }
+        return begin(addresses);
+    }
+
+    private CompletableFuture<Result> begin(List<InetSocketAddress> candidates) {
         if (started) {
             throw new IllegalStateException("this swarm has already been started");
         }
@@ -197,6 +241,10 @@ public final class SwarmDownloader implements AutoCloseable {
 
         LeecherHandler handler = client.open(seeder, request);
         sessions.put(sessionId, handler);
+        PeerSelector.Candidate knownPeer = known.get(seeder);
+        if (knownPeer != null) {
+            roster.put(sessionId, knownPeer);
+        }
         handler.completion().whenComplete((result, failure) -> onSessionEnded(sessionId, seeder, failure));
     }
 
@@ -239,6 +287,7 @@ public final class SwarmDownloader implements AutoCloseable {
 
     private synchronized void onSessionEnded(int sessionId, InetSocketAddress seeder, Throwable failure) {
         sessions.remove(sessionId);
+        roster.remove(sessionId);
         availability.leave(sessionId);
         if (failure != null) {
             sessionsLost++;
@@ -309,6 +358,31 @@ public final class SwarmDownloader implements AutoCloseable {
         }
     }
 
+    /**
+     * LAPS score of this session relative to everyone currently connected. Scoring an
+     * empty or singleton set is meaningless, so those return NaN and the scheduler
+     * treats the session as unranked.
+     */
+    private double scoreSession(int sessionId) {
+        if (selector == null) {
+            return Double.NaN;
+        }
+        PeerSelector.Candidate self = roster.get(sessionId);
+        if (self == null) {
+            return Double.NaN;
+        }
+        List<PeerSelector.Candidate> live = new ArrayList<>(roster.values());
+        if (live.size() < 2) {
+            return Double.NaN;
+        }
+        for (var scored : selector.explain(live)) {
+            if (scored.candidate().peerId().equals(self.peerId())) {
+                return scored.score();
+            }
+        }
+        return Double.NaN;
+    }
+
     /** One session's view of the swarm: it can only speak for itself. */
     private final class Events implements SessionEvents {
 
@@ -331,6 +405,22 @@ public final class SwarmDownloader implements AutoCloseable {
         @Override
         public void chunkStored(int chunkIndex) {
             SwarmDownloader.this.chunkStored(sessionId, chunkIndex);
+        }
+
+        @Override
+        public void blockCompleted(int bytes, Duration elapsed) {
+            PeerSelector.Candidate candidate = roster.get(sessionId);
+            if (selector != null && candidate != null) {
+                selector.metricsFor(candidate.peerId()).blockCompleted(bytes, elapsed);
+            }
+        }
+
+        @Override
+        public void blockFailed() {
+            PeerSelector.Candidate candidate = roster.get(sessionId);
+            if (selector != null && candidate != null) {
+                selector.metricsFor(candidate.peerId()).blockFailed();
+            }
         }
     }
 
