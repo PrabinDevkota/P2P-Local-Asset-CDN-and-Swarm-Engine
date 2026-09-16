@@ -90,9 +90,10 @@ public final class RequestTracker {
             throw new IllegalStateException("request budget is full: " + outstanding.size()
                     + " requests, " + outstandingBytes + " bytes");
         }
+        long issuedAt = nanoClock.getAsLong();
         Outstanding request = new Outstanding(
                 allocateRequestId(), chunkIndex, blockOffset, blockLength,
-                nanoClock.getAsLong() + timeoutNanos);
+                issuedAt, issuedAt + timeoutNanos);
         outstanding.put(request.requestId(), request);
         outstandingBytes += blockLength;
         return request;
@@ -211,7 +212,8 @@ public final class RequestTracker {
         return id;
     }
 
-    public record Outstanding(long requestId, int chunkIndex, int blockOffset, int blockLength, long deadlineNanos) {
+    public record Outstanding(long requestId, int chunkIndex, int blockOffset, int blockLength,
+                             long issuedAtNanos, long deadlineNanos) {
 
         String describeSpan() {
             return "chunk " + chunkIndex + " [" + blockOffset + "+" + blockLength + "]";
