@@ -44,6 +44,8 @@ public final class ChunkAssembler implements Closeable {
     private final ChunkStore store;
     private final Path stagingDir;
     private final Map<Integer, Partial> open = new HashMap<>();
+    /** Bumped when a round of this chunk is thrown away, so in-flight writes from it cannot seed the next. */
+    private final Map<Integer, Integer> epoch = new HashMap<>();
 
     public ChunkAssembler(ChunkInventory inventory, ChunkStore store, Path stagingDir) throws IOException {
         this.inventory = Objects.requireNonNull(inventory, "inventory");
@@ -60,11 +62,27 @@ public final class ChunkAssembler implements Closeable {
      */
     public synchronized void accept(int chunkIndex, long offsetInChunk, byte[] bytes, int off, int len)
             throws IOException {
+        accept(chunkIndex, offsetInChunk, bytes, off, len, epoch(chunkIndex));
+    }
+
+    /**
+     * Same as {@link #accept(int, long, byte[], int, int)}, but drops the write when it
+     * belongs to a round that has already been thrown away.
+     *
+     * <p>The disk executor is a queue. A hash mismatch can bump the epoch while a write
+     * from the failed round is still waiting, and that write must not open a new staging
+     * file — those bytes are why the last attempt failed.
+     */
+    public synchronized void accept(int chunkIndex, long offsetInChunk, byte[] bytes, int off, int len,
+                                    int expectedEpoch) throws IOException {
         Objects.requireNonNull(bytes, "bytes");
         if (off < 0 || len <= 0 || off + len > bytes.length) {
             throw new IllegalArgumentException("slice out of bounds: off=" + off + " len=" + len);
         }
         inventory.requireInRange(chunkIndex, offsetInChunk, len);
+        if (inventory.has(chunkIndex) || expectedEpoch != epoch(chunkIndex)) {
+            return;
+        }
 
         Partial partial = openPartial(chunkIndex);
         ByteBuffer buffer = ByteBuffer.wrap(bytes, off, len);
@@ -77,6 +95,11 @@ public final class ChunkAssembler implements Closeable {
             position += written;
         }
         partial.received.add(offsetInChunk, offsetInChunk + len);
+    }
+
+    /** The assembly round this chunk is in. Capture it before handing work to the disk thread. */
+    public synchronized int epoch(int chunkIndex) {
+        return epoch.getOrDefault(chunkIndex, 0);
     }
 
     public synchronized boolean isComplete(int chunkIndex) {
@@ -110,7 +133,11 @@ public final class ChunkAssembler implements Closeable {
             // leaves no bytes on disk to be retried or accidentally served.
             return Optional.of(store.putVerifiedFile(chunk.sha256(), partial.file));
         } catch (IllegalArgumentException e) {
+            bumpEpoch(chunkIndex);
             throw new VerificationFailed(chunkIndex, chunk.sha256(), e);
+        } catch (IOException e) {
+            bumpEpoch(chunkIndex);
+            throw e;
         }
     }
 
@@ -120,6 +147,11 @@ public final class ChunkAssembler implements Closeable {
         if (partial != null) {
             partial.close();
         }
+        bumpEpoch(chunkIndex);
+    }
+
+    private void bumpEpoch(int chunkIndex) {
+        epoch.merge(chunkIndex, 1, Integer::sum);
     }
 
     @Override

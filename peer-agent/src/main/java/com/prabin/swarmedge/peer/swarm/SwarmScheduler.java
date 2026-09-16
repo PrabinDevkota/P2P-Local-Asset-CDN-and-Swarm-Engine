@@ -8,7 +8,6 @@ import com.prabin.swarmedge.manifest.ChunkEntry;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -64,7 +63,7 @@ public final class SwarmScheduler {
     private final Map<Integer, Deque<BlockPlan.Block>> unleased = new LinkedHashMap<>();
 
     /** Who is fetching each block. More than one holder only happens in the endgame. */
-    private final Map<BlockPlan.Block, Set<Integer>> leases = new HashMap<>();
+    private final Map<BlockPlan.Block, Set<Integer>> leases = new LinkedHashMap<>();
 
     /** Blocks whose bytes have landed. Not worth duplicating, and not worth cancelling. */
     private final Set<BlockPlan.Block> delivered = new HashSet<>();
@@ -114,6 +113,14 @@ public final class SwarmScheduler {
         DuplicateCanceller NONE = (sessionId, block) -> { };
 
         void cancel(int sessionId, BlockPlan.Block block);
+
+        /**
+         * The whole chunk is being rebuilt. Drop this request even if payload is already
+         * arriving: those bytes belong to the round that just failed the hash.
+         */
+        default void abandon(int sessionId, BlockPlan.Block block) {
+            cancel(sessionId, block);
+        }
     }
 
     public int blockSize() {
@@ -308,14 +315,32 @@ public final class SwarmScheduler {
     /**
      * Rebuild a chunk from nothing. Its assembled bytes failed the manifest hash, so
      * every block has to be fetched again even if some of them were fine.
+     *
+     * <p>Anyone still fetching this chunk is called off: their in-flight bytes belong to
+     * the round that just failed, and leaving those leases in place would let the same
+     * block be handed out again while the old request is still open.
      */
-    private synchronized void restartChunk(int chunkIndex) {
-        if (inventory.has(chunkIndex)) {
-            // Another session already produced a verified copy; nothing to rebuild.
-            return;
+    private void restartChunk(int chunkIndex) {
+        List<Map.Entry<Integer, BlockPlan.Block>> toCancel = new ArrayList<>();
+        synchronized (this) {
+            if (inventory.has(chunkIndex)) {
+                // Another session already produced a verified copy; nothing to rebuild.
+                return;
+            }
+            for (Map.Entry<BlockPlan.Block, Set<Integer>> entry : List.copyOf(leases.entrySet())) {
+                if (entry.getKey().chunkIndex() != chunkIndex) {
+                    continue;
+                }
+                for (int sessionId : entry.getValue()) {
+                    toCancel.add(Map.entry(sessionId, entry.getKey()));
+                }
+            }
+            forgetChunk(chunkIndex);
+            unleased.put(chunkIndex, blocksOf(chunkIndex));
         }
-        forgetChunk(chunkIndex);
-        unleased.put(chunkIndex, blocksOf(chunkIndex));
+        for (Map.Entry<Integer, BlockPlan.Block> work : toCancel) {
+            canceller.abandon(work.getKey(), work.getValue());
+        }
     }
 
     /** A chunk verified into the store, so it leaves the queue for good. */

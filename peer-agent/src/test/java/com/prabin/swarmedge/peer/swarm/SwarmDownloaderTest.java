@@ -359,6 +359,27 @@ class SwarmDownloaderTest {
                 .hasMessageContaining("already been started");
     }
 
+    @Test
+    void aPoisonedSeederDoesNotStopTheSwarmFetchingTheChunkFromSomeoneElse() throws Exception {
+        // Two peers hold every chunk. One has had a file flipped behind the store's back.
+        // A swarm that blamed whoever delivered the last block would sometimes kill the
+        // honest peer and keep the liar; it has to rebuild the chunk and ask again.
+        InetSocketAddress honest = seederWithEverything("honest");
+        ChunkStore rottenStore = seederStore("rotten", allChunks());
+        ChunkEntry victim = manifest.chunks().get(0);
+        byte[] rotten = Files.readAllBytes(rottenStore.pathFor(victim.sha256()));
+        rotten[10] ^= 0xFF;
+        Files.write(rottenStore.pathFor(victim.sha256()), rotten);
+        InetSocketAddress liar = server(rottenStore, BlockSender.Mode.BUFFERED).address();
+
+        Leecher leecher = leecher("leecher");
+        await(swarm(leecher, 2).start(List.of(honest, liar)));
+
+        assertThat(leecher.inventory().complete()).isTrue();
+        assertThat(leecher.store().contains(victim.sha256())).isTrue();
+        assertThatRebuiltAssetMatches(leecher);
+    }
+
     private SwarmDownloader swarm(Leecher leecher, int maxPeers) {
         // Generous stall deadline: these runs are meant to finish, not to trip it.
         return swarm(leecher, maxPeers, Duration.ofSeconds(5), Duration.ofSeconds(30));

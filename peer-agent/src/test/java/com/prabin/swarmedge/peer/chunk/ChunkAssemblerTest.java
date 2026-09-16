@@ -154,6 +154,40 @@ class ChunkAssemblerTest {
     }
 
     @Test
+    void aWriteFromAFailedRoundDoesNotSeedTheRetry() throws Exception {
+        try (ChunkAssembler assembler = assembler()) {
+            byte[] tampered = chunkBytes(0);
+            tampered[0] ^= 0xFF;
+            assembler.accept(0, 0, tampered, 0, tampered.length);
+            int failedRound = assembler.epoch(0);
+            assertThatThrownBy(() -> assembler.commitIfComplete(0))
+                    .isInstanceOf(ChunkAssembler.VerificationFailed.class);
+            assertThat(assembler.epoch(0)).isGreaterThan(failedRound);
+
+            // A disk task queued before the mismatch still carries the old epoch.
+            assembler.accept(0, 0, tampered, 0, tampered.length, failedRound);
+            assertThat(assembler.stagedBytes(0)).isZero();
+
+            assembler.accept(0, 0, chunkBytes(0), 0, CHUNK_SIZE);
+            assertThat(assembler.commitIfComplete(0)).isPresent();
+            assertThat(store.read(chunk(0).sha256()).orElseThrow()).containsExactly(chunkBytes(0));
+        }
+    }
+
+    @Test
+    void aWriteAfterTheChunkIsStoredIsIgnored() throws Exception {
+        try (ChunkAssembler assembler = assembler()) {
+            assembler.accept(0, 0, chunkBytes(0), 0, CHUNK_SIZE);
+            assertThat(assembler.commitIfComplete(0)).isPresent();
+            inventory.markStored(0);
+
+            assembler.accept(0, 0, chunkBytes(0), 0, CHUNK_SIZE);
+            assertThat(assembler.stagedBytes(0)).isZero();
+            assertThat(stagingFiles()).isEmpty();
+        }
+    }
+
+    @Test
     void aWriteOutsideTheChunkIsRefusedBeforeItTouchesDisk() throws Exception {
         try (ChunkAssembler assembler = assembler()) {
             byte[] data = new byte[BLOCK_SIZE];

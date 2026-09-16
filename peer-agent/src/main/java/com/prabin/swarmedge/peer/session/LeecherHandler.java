@@ -39,9 +39,11 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>Requests are kept within the tracker's budget, which bounds both how much the peer
  * can have in flight and how much of it we are willing to hold. A block that does not
- * arrive in time is cancelled and re-queued; a chunk whose hash is wrong ends the
- * session, because with a single peer there is nowhere better to ask. Choosing a
- * different peer on a hash mismatch is the scheduler's job in a later phase.
+ * arrive in time is cancelled and re-queued. A chunk whose hash is wrong is thrown
+ * away and rebuilt: with a single peer that ends the session, because there is nowhere
+ * else to ask, and in a swarm the scheduler puts the chunk back on the shared queue
+ * so another peer can supply it. The session that delivered the last block is not
+ * blamed — in a swarm that block is only one slice of a chunk many peers wrote.
  *
  * <p>A seeder that accepts the connection and then says nothing would otherwise leave
  * the transfer waiting forever, because the block timeout only starts once blocks are
@@ -246,11 +248,16 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
      * Stop fetching a block another peer already delivered (P6-04, §8.3).
      *
      * <p>Called from the winning session's thread, so the work hops onto ours. A block
-     * whose payload is already arriving is left alone: those bytes are about to land at
-     * the same offset with the same contents, and abandoning them mid-stream would cost
-     * more than it saves.
+     * whose payload is already arriving is left alone unless {@code abandon} is set:
+     * those bytes are about to land at the same offset with the same contents, and
+     * abandoning them mid-stream would cost more than it saves. A hash-fail rebuild
+     * is the exception — those bytes belong to a round that already failed.
      */
     public void cancelBlock(BlockPlan.Block block) {
+        cancelBlock(block, false);
+    }
+
+    public void cancelBlock(BlockPlan.Block block, boolean abandon) {
         Objects.requireNonNull(block, "block");
         ChannelHandlerContext ctx = context;
         if (ctx == null) {
@@ -261,9 +268,13 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
                 return;
             }
             InFlight arriving = current;
-            if (arriving != null && arriving.chunkIndex() == block.chunkIndex()
-                    && arriving.blockOffset() == block.blockOffset()) {
+            boolean thisBlock = arriving != null && arriving.chunkIndex() == block.chunkIndex()
+                    && arriving.blockOffset() == block.blockOffset();
+            if (thisBlock && !abandon) {
                 return;
+            }
+            if (thisBlock) {
+                current = new InFlight(arriving.chunkIndex(), arriving.blockOffset(), false);
             }
             tracker.findBySpan(block.chunkIndex(), block.blockOffset(), block.blockLength())
                     .ifPresent(request -> {
@@ -373,7 +384,11 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
         long offsetInChunk = (long) current.blockOffset() + data.offsetInBlock();
         int chunkIndex = current.chunkIndex();
         byte[] bytes = data.bytes();
-        onDisk(ctx, () -> assembler.accept(chunkIndex, offsetInChunk, bytes, 0, bytes.length));
+        // Capture the round before hopping to disk: a hash mismatch can bump the epoch
+        // while this write is still queued, and those bytes must not seed the retry.
+        int expectedEpoch = assembler.epoch(chunkIndex);
+        onDisk(ctx, () -> assembler.accept(chunkIndex, offsetInChunk, bytes, 0, bytes.length,
+                expectedEpoch));
     }
 
     private void onBlockEnd(ChannelHandlerContext ctx, BlockStream.End end) {
@@ -422,8 +437,20 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
         pendingCommits--;
         hashMismatches++;
         plan.requeueChunk(failure.chunkIndex());
-        // One peer, one source of bytes: there is no better peer to ask, so stop.
-        failAndClose(ctx, failure);
+        if (plan.soleSource()) {
+            // One peer, one source of bytes: there is no better peer to ask, so stop.
+            failAndClose(ctx, failure);
+            return;
+        }
+        // A swarm assembled this chunk from many peers. The session that delivered the
+        // last block is not the one that poisoned it, so killing it would drop an honest
+        // source and keep the liar. Rebuild from the shared queue instead. After the
+        // same number of mismatches as block attempts this session is itself a bad bet.
+        if (hashMismatches >= settings.maxAttemptsPerBlock()) {
+            failAndClose(ctx, failure);
+            return;
+        }
+        requestMore(ctx);
     }
 
     private void onTimeoutSweep(ChannelHandlerContext ctx) {

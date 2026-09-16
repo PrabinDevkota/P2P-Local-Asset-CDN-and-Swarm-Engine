@@ -40,7 +40,7 @@ Raw run folders (`research/raw/<runId>/` with `config.yaml`, `git_commit.txt`, `
 
 - [x] P3-01 Announce DTO validation + server-observed IP (an advertised IP is never read)
 - [x] P3-02 Redis HASH + per-field TTL 45 s via `HEXPIRE` (one field expires without touching the others)
-- [x] P3-03 Candidate ranking v0 (`GET /api/v1/assets/{assetId}/peers?limit=20`; exclude self, site then network group)
+- [x] P3-03 Candidate ranking v0 (`GET /api/v1/assets/{assetId}/peers?limit=20`; exclude self, network group then site)
 - [x] P3-04 `POST /api/v1/auth/peer-token`: short-lived HMAC token bound to `peerId` and site policy
 - [x] P3-05 250 peer-record load test: p95 discovery latency and Redis state size recorded, never asserted
 
@@ -71,7 +71,7 @@ Found and fixed on review of this phase:
 - Nothing reaped a connection that stalled below ACTIVE. A seeder could be tied up by sockets that said nothing, and a leecher waited forever on a seeder that accepted and went quiet, because the block timeout only starts once blocks are being requested. Both sides now have a handshake deadline.
 - The seeder answered PING and accepted HAVE, PONG, and CANCEL before the handshake. An unauthenticated socket should not be useful for anything, so those are refused now.
 
-Not covered in this phase: the token in HELLO is carried but not verified (`PeerAuthPolicy` is the seam for the hardening phase), a hash mismatch ends the session instead of re-fetching from another peer (Phase 6 scheduler), and block-level resume inside a partly received chunk restarts that chunk (chunk-level resume works).
+Not covered in this phase: the token in HELLO is carried but not verified (`PeerAuthPolicy` is the seam for the hardening phase), and block-level resume inside a partly received chunk restarts that chunk (chunk-level resume works). A hash mismatch on a single-peer session still ends it; a swarm rebuilds the chunk and asks someone else.
 
 ## Phase 5 — Basic swarm (B1) — done
 
@@ -115,6 +115,10 @@ The endgame exists for the tail, not the average. Near the end there is less wor
 LAPS reorders sources and grants nothing. Every byte from the best-scoring peer is still hashed against the signed manifest, and no score exempts anyone.
 
 Not covered in this phase: the agent has no tracker announce loop, so a B2 or B3 run gets its locality labels from the scenario rather than from discovery — the source policy is exercised, discovery is not. The `capabilities` / `uploadBudget` announce fields are still absent from the tracker (§10.1), so `advertisedUploadLoad` has no wire path yet. The window stays fixed at 8 outstanding requests; §8.3's "shrink or expand once the baseline is stable" is not implemented. And nothing yet feeds `PeerMetrics` from a live session — the selector holds the history, but wiring the recording into `LeecherHandler` is what makes a B3 run differ from a B2 one in practice.
+
+Found and fixed on review of this phase:
+
+- A swarm that assembled a bad chunk blamed whoever delivered the last block and closed that session. In a swarm that block is one slice of a file many peers wrote, so the honest source was the one most likely to be dropped. The chunk is now rebuilt on the shared queue; stale disk writes from the failed round cannot seed the retry; a session is only closed for this if it is the sole source, or if it keeps assembling mismatches.
 
 ## Not started
 

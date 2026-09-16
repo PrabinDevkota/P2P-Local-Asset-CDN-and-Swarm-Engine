@@ -78,7 +78,17 @@ public final class SwarmDownloader implements AutoCloseable {
         this.assembler = Objects.requireNonNull(assembler, "assembler");
         this.availability = new ChunkAvailability(inventory.chunkCount(), settings.tieBreakSeed());
         this.scheduler = new SwarmScheduler(inventory, availability, settings.session().blockSize(),
-                settings.endgameThreshold(), this::cancelDuplicate);
+                settings.endgameThreshold(), new SwarmScheduler.DuplicateCanceller() {
+                    @Override
+                    public void cancel(int sessionId, BlockPlan.Block block) {
+                        cancelOn(sessionId, block, false);
+                    }
+
+                    @Override
+                    public void abandon(int sessionId, BlockPlan.Block block) {
+                        cancelOn(sessionId, block, true);
+                    }
+                });
         this.client = new LeecherClient();
         this.watchdog = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "swarm-watchdog");
@@ -193,15 +203,16 @@ public final class SwarmDownloader implements AutoCloseable {
     /**
      * A block arrived from somewhere else, so this session can stop fetching it (P6-04).
      * The scheduler decides which session loses; it holds no sockets, so this is how the
-     * decision reaches one.
+     * decision reaches one. {@code abandon} is the hash-fail path: those bytes belong to
+     * a round that already failed, so an arriving payload is dropped rather than kept.
      */
-    private void cancelDuplicate(int sessionId, BlockPlan.Block block) {
+    private void cancelOn(int sessionId, BlockPlan.Block block, boolean abandon) {
         LeecherHandler session;
         synchronized (this) {
             session = sessions.get(sessionId);
         }
         if (session != null) {
-            session.cancelBlock(block);
+            session.cancelBlock(block, abandon);
         }
     }
 

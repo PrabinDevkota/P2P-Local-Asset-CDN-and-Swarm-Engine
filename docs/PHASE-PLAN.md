@@ -2,7 +2,7 @@
 
 Task IDs are the blueprint's backlog IDs (§16). `./mvnw verify` is the gate for every step.
 
-Phases 0–5 are complete. **Phase 6 (locality + LAPS, baselines B2/B3) is next.**
+Phases 0–6 are complete. **Phase 7 (persistent cache, eviction, warm start, baseline B4) is next.**
 
 ## What exists
 
@@ -14,7 +14,7 @@ Phases 0–5 are complete. **Phase 6 (locality + LAPS, baselines B2/B3) is next.
 | `origin-fixture/` | `GET /files/{name}` 200/206/404, `GET /manifests/{name}.json` copy only, served-byte ledger per run |
 | `peer-agent/` | `OriginDownloader` (B0 path) plus a live swarm: seeders serve, `SwarmDownloader` fetches rarest-first from many peers and verifies |
 | `tracker-service/` | Announce with bearer peer token, Redis `HEXPIRE` 45 s, ranked candidates, `POST /api/v1/auth/peer-token` |
-| `benchmark-runner/` | `B0Runner` and `B1Runner` with their configs, reading `research/configs/*.yaml` |
+| `benchmark-runner/` | `B0Runner` and `SwarmRunner` with their configs, reading `research/configs/*.yaml` |
 
 ## Phase 4 — Two-peer Netty session (`peer-agent/`) — complete
 
@@ -38,8 +38,8 @@ Phase 4 proved one connection. Phase 5 was about many, and every new problem was
 | P5-01 | `ChunkAvailability.java` | BITFIELD on join and HAVE mid-session fold into one holder count per chunk; a dropped peer takes its whole inventory with it |
 | P5-02 | `ChunkAvailability.rarestFirst` | Scarcest wanted chunk first, ties broken on a seed so an even swarm still replays in order |
 | P5-03 | `SwarmScheduler.java`, `BlockSource.java` | One shared queue behind a per-session view; a block is leased to exactly one peer, 8 outstanding each |
-| P5-04 | `B1Runner.java`, `b1-basic-swarm.yaml` | Eight loopback seeders, repeats agree on the asset hash |
-| P5-05 | `B1RunnerTest.java` | Peers killed mid-transfer at 10 % and 25 %; their blocks are re-queued and the swarm still finishes |
+| P5-04 | `SwarmRunner.java`, `b1-basic-swarm.yaml` | Eight loopback seeders, repeats agree on the asset hash |
+| P5-05 | `SwarmRunnerTest.java` | Peers killed mid-transfer at 10 % and 25 %; their blocks are re-queued and the swarm still finishes |
 
 Supporting work: `SwarmDownloader` dials candidates and owns the sessions, `SessionEvents` is how a `LeecherHandler` reports what it learned and what it stored, and `BlockPlan` now implements `BlockSource` so the single-peer path is unchanged.
 

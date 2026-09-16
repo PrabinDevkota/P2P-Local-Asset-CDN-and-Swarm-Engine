@@ -150,7 +150,7 @@ What keeps it honest:
 
 - A BLOCK is accepted only against a request this peer issued, with the **same** chunk, offset, and length. Anything else is either late data (read past and dropped) or a protocol violation (connection closed).
 - Payload is written to a per-chunk staging file as it arrives, so **no chunk is ever held in heap**. The chunk is hashed from disk and only then moved into the store.
-- A hash mismatch deletes the staging file and ends the session. Nothing unverified survives to be stored or served.
+- A hash mismatch deletes the staging file. With one peer that ends the session; in a swarm the chunk is rebuilt and asked of someone else. Nothing unverified survives to be stored or served.
 - The outstanding-request budget **is** the memory budget: unrequested bytes never reach disk, so a peer cannot push more at us than the budget allows.
 - Hashing and file I/O run on a dedicated thread. The Netty event loop never blocks.
 - A slow reader makes the channel unwritable, which is what stops the seeder pulling more blocks off disk.

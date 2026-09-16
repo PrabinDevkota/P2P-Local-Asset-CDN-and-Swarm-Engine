@@ -295,6 +295,7 @@ class SwarmEndgameTest {
         first.requeueChunk(shared.chunkIndex());
 
         assertThat(scheduler.sourcesFor(shared)).isZero();
+        assertThat(cancelled).extracting(Cancelled::sessionId).contains(1);
         assertThat(scheduler.viewFor(3, BLOCK_SIZE).next(HAS_EVERYTHING))
                 .isPresent()
                 .get()

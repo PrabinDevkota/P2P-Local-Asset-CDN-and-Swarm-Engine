@@ -124,8 +124,9 @@ public final class SwarmRunner {
                     .sum();
             RunResult run = new RunResult(runId, killFraction, sha256OfFile(output), Files.size(output),
                     peerBytes, result.peersDialled(), result.peersLost(), elapsedMillis);
-            log.info("B1 run {} asset={} peerBytes={} peersLost={} elapsedMs={}",
-                    runId, run.assetSha256(), run.peerBytes(), run.peersLost(), run.elapsedMillis());
+            log.info("{} run {} asset={} peerBytes={} peersLost={} elapsedMs={}",
+                    config.baseline(), runId, run.assetSha256(), run.peerBytes(), run.peersLost(),
+                    run.elapsedMillis());
             return run;
         } finally {
             seeders.forEach(SeederServer::close);
