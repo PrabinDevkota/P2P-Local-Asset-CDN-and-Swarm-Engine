@@ -313,6 +313,51 @@ class SwarmSchedulerTest {
     }
 
     @Test
+    void aWorsePeerWaitsWhileABetterOneStillHasRoom() {
+        java.util.Map<Integer, Double> scores = java.util.Map.of(1, 1.0, 2, 0.2);
+        SwarmScheduler scheduler = new SwarmScheduler(inventory, availability, BLOCK_SIZE,
+                SwarmScheduler.NO_ENDGAME, SwarmScheduler.DuplicateCanceller.NONE, 4, scores::get);
+        BlockSource better = scheduler.viewFor(1, BLOCK_SIZE);
+        BlockSource worse = scheduler.viewFor(2, BLOCK_SIZE);
+        everyoneHasEverything(1, 2);
+
+        assertThat(better.next(HAS_EVERYTHING)).isPresent();
+        // The better source has room left, so the worse one is skipped rather than
+        // taking work that the better one is about to ask for.
+        assertThat(worse.next(HAS_EVERYTHING)).isEmpty();
+        for (int i = 1; i < 4; i++) {
+            assertThat(better.next(HAS_EVERYTHING)).isPresent();
+        }
+        assertThat(worse.next(HAS_EVERYTHING)).isPresent();
+    }
+
+    @Test
+    void anIdleBetterPeerDoesNotStarveAWorseOne() {
+        java.util.Map<Integer, Double> scores = java.util.Map.of(1, 1.0, 2, 0.2);
+        SwarmScheduler scheduler = new SwarmScheduler(inventory, availability, BLOCK_SIZE,
+                SwarmScheduler.NO_ENDGAME, SwarmScheduler.DuplicateCanceller.NONE, 4, scores::get);
+        BlockSource worse = scheduler.viewFor(2, BLOCK_SIZE);
+        everyoneHasEverything(1, 2);
+
+        // The better source has advertised but holds no lease. Waiting for it would
+        // leave this session idle on a handshake that has not happened yet.
+        assertThat(worse.next(HAS_EVERYTHING)).isPresent();
+    }
+
+    @Test
+    void firstComeIsUnchangedWhenNobodyIsScored() {
+        SwarmScheduler scheduler = new SwarmScheduler(inventory, availability, BLOCK_SIZE,
+                SwarmScheduler.NO_ENDGAME, SwarmScheduler.DuplicateCanceller.NONE, 4,
+                SwarmScheduler.SourcePreference.NONE);
+        BlockSource first = scheduler.viewFor(1, BLOCK_SIZE);
+        BlockSource second = scheduler.viewFor(2, BLOCK_SIZE);
+        everyoneHasEverything(1, 2);
+
+        assertThat(first.next(HAS_EVERYTHING)).isPresent();
+        assertThat(second.next(HAS_EVERYTHING)).isPresent();
+    }
+
+    @Test
     void anAvailabilityMapForADifferentAssetIsRefused() {
         assertThatThrownBy(() -> new SwarmScheduler(inventory, new ChunkAvailability(CHUNKS + 1, SEED), BLOCK_SIZE))
                 .isInstanceOf(IllegalArgumentException.class)
