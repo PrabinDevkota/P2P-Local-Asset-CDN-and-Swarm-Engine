@@ -37,6 +37,8 @@ class SwarmScenarioConfigTest {
         assertThat(config.sourcePolicy()).isEqualTo(SwarmScenarioConfig.SourcePolicy.AS_DISCOVERED);
         assertThat(config.lapsWeights()).isNull();
         assertThat(config.endgameThresholdBlocks()).isZero();
+        assertThat(config.leecherLocality().siteId()).isEqualTo("hq");
+        assertThat(config.seederLocalities()).hasSize(8);
     }
 
     @Test
@@ -68,6 +70,8 @@ class SwarmScenarioConfigTest {
             assertThat(other.maxAttemptsPerBlock()).isEqualTo(b1.maxAttemptsPerBlock());
             assertThat(other.killFractions()).isEqualTo(b1.killFractions());
             assertThat(other.everyPeerHoldsEverything()).isEqualTo(b1.everyPeerHoldsEverything());
+            assertThat(other.leecherLocality()).isEqualTo(b1.leecherLocality());
+            assertThat(other.seederLocalities()).isEqualTo(b1.seederLocalities());
         }
 
         // ...and the scheduler section is where they are allowed to disagree.
@@ -107,6 +111,25 @@ class SwarmScenarioConfigTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("AS_DISCOVERED")
                 .hasMessageContaining("LAPS");
+    }
+
+    @Test
+    void aScoringPolicyNeedsTopologyLabels() {
+        String withoutTopology = minimal().replace("""
+                topology:
+                  leecher:
+                    siteId: hq
+                    networkGroupId: floor-2
+                  seeders:
+                    - { siteId: hq, networkGroupId: floor-2 }
+                    - { siteId: hq, networkGroupId: floor-9 }
+                    - { siteId: branch, networkGroupId: wifi }
+                    - { siteId: branch, networkGroupId: dc }
+                """, "");
+        assertThatThrownBy(() -> SwarmScenarioConfig.parse(new StringReader(
+                withoutTopology.replace("sourcePolicy: AS_DISCOVERED", "sourcePolicy: LAPS"))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("topology.seeders is required");
     }
 
     @Test
@@ -265,6 +288,15 @@ class SwarmScenarioConfigTest {
                 scheduler:
                   sourcePolicy: AS_DISCOVERED
                   endgameThresholdBlocks: 0
+                topology:
+                  leecher:
+                    siteId: hq
+                    networkGroupId: floor-2
+                  seeders:
+                    - { siteId: hq, networkGroupId: floor-2 }
+                    - { siteId: hq, networkGroupId: floor-9 }
+                    - { siteId: branch, networkGroupId: wifi }
+                    - { siteId: branch, networkGroupId: dc }
                 churn:
                   killFractions: [0.0, 0.10, 0.25]
                   everyPeerHoldsEverything: true
