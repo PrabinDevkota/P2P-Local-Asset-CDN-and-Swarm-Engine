@@ -75,6 +75,17 @@ class ChunkAvailabilityTest {
     }
 
     @Test
+    void holdersOfNamesTheSessionsNotJustTheCount() {
+        ChunkAvailability availability = new ChunkAvailability(CHUNKS, SEED);
+        availability.join(1, bits(0, 1));
+        availability.join(2, bits(1, 2));
+
+        assertThat(availability.holdersOf(1)).containsExactlyInAnyOrder(1, 2);
+        assertThat(availability.holdersOf(0)).containsExactly(1);
+        assertThat(availability.holdersOf(5)).isEmpty();
+    }
+
+    @Test
     void aDroppedPeerTakesItsWholeInventoryWithIt() {
         ChunkAvailability availability = new ChunkAvailability(CHUNKS, SEED);
         availability.join(1, bits(0, 1));
