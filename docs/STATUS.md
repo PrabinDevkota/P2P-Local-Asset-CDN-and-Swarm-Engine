@@ -114,7 +114,9 @@ The endgame exists for the tail, not the average. Near the end there is less wor
 
 LAPS reorders sources and grants nothing. Every byte from the best-scoring peer is still hashed against the signed manifest, and no score exempts anyone.
 
-Not covered in this phase: the agent has no tracker announce loop, so a B2 or B3 run gets its locality labels from the scenario rather than from discovery — the source policy is exercised, discovery is not. The `capabilities` / `uploadBudget` announce fields are still absent from the tracker (§10.1), so `advertisedUploadLoad` has no wire path yet. The window stays fixed at 8 outstanding requests; §8.3's "shrink or expand once the baseline is stable" is not implemented. And nothing yet feeds `PeerMetrics` from a live session — the selector holds the history, but wiring the recording into `LeecherHandler` is what makes a B3 run differ from a B2 one in practice.
+Not covered in this phase: the agent has no tracker announce loop, so a B2 or B3 run gets its locality labels from the scenario rather than from discovery — the source policy is exercised, discovery is not. The `capabilities` / `uploadBudget` announce fields are still absent from the tracker (§10.1), so `advertisedUploadLoad` has no wire path yet. The window stays fixed at 8 outstanding requests; §8.3's "shrink or expand once the baseline is stable" is not implemented.
+
+Live sessions now record into `PeerMetrics`: a block that arrives updates goodput and RTT, a timeout or refusal updates health. The scheduler prefers a better-scoring connected peer while that peer still has room in its pipeline, so B3 can differ from B2 during a single transfer rather than only on the next dial. An idle better peer (zero leases) is not assumed to be about to ask, or a worse session would wait on a handshake that has not happened yet.
 
 Found and fixed on review of this phase:
 

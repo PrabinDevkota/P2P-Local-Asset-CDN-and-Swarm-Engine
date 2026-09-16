@@ -72,7 +72,7 @@ peerScore = wL*locality + wT*throughput + wR*rtt + wC*capacity + wH*health
 
 Two rules that matter more than the formula. A metric is only written from something observed — a completed transfer or a PONG — never from a number a peer asserts about itself, or the score becomes a self-report. And LAPS reorders sources; it never overrides verification. A chunk from the best-scoring peer in the swarm is still refused if its hash is wrong.
 
-All five are done. What remains is integration rather than design: nothing records into `PeerMetrics` from a live session yet, so a B3 run currently scores on locality alone and matches B2. Closing that is the first task of the next stage, ahead of any Phase 7 work, because until it is closed the B2-against-B3 comparison has nothing to compare.
+All five are done. Live sessions now record into `PeerMetrics`, and the scheduler prefers a better-scoring source while that source still has pipeline room, so a B3 run can differ from B2 during the transfer itself. `research/configs/*.yaml` carry an identical `topology` section so B2/B3 have labels to score with without moving any other experimental variable.
 
 ## Phase 7 — Persistent cache and cross-version reuse (`peer-agent/`, `manifest-tool/`)
 

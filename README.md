@@ -202,7 +202,7 @@ No CHOKE/UNCHOKE in the MVP. Upload uses **device upload budget / backpressure**
 Two stages, kept separate for experiments:
 
 - **A — which chunk/block?** Rarest-first with a seeded tie-break, plus endgame duplication to at most two sources — **done** (`ChunkAvailability` + `SwarmScheduler`).
-- **B — which source?** Locality-only (B2) and **LAPS** (B3) — **done** (`LapsScorer` + `PeerSelector`). Nothing records into `PeerMetrics` from a live session yet, so a real run still scores on locality alone.
+- **B — which source?** Locality-only (B2) and **LAPS** (B3) — **done** (`LapsScorer` + `PeerSelector`). Live sessions record observed goodput, RTT, and health into `PeerMetrics`, and the scheduler prefers a better-scoring peer while that peer still has pipeline room.
 
 Source priority (later): local verified cache → healthy local peers → same-site EDGE → limited origin.
 

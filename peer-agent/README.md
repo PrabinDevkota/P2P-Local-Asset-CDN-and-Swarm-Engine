@@ -70,6 +70,8 @@ Rarest-first decides *which chunk*. LAPS decides *which peer*, and the two stay 
 - **Two sources at the tail, never three.** Below `endgameThreshold` blocks a block may go to a second peer and the first arrival cancels the other, so one straggler cannot set the finish time. Duplicating to everybody would turn the tail of every transfer into a broadcast.
 - **LAPS grants nothing.** It reorders sources. Bytes from the top-scoring peer are hashed against the signed manifest exactly like everyone else's.
 
+A live session now records into `PeerMetrics`: goodput and RTT from a block that arrived, health from timeouts and refusals. `SwarmDownloader` with a `PeerSelector` prefers a better-scoring session while that session still has room in its pipeline, so B3 can differ from B2 on a single transfer. Without a selector the swarm is B1: first-come among peers that hold the chunk.
+
 Rules worth remembering when editing this module:
 
 - Nothing that touches disk or hashes bytes may run on a Netty event loop. Hand it to the disk executor, which must stay single-threaded so block writes and the commit after them stay ordered.
