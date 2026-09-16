@@ -39,6 +39,22 @@ swarm:
   stallTimeoutMillis: 120000
   maxAttemptsPerBlock: 3
 
+# Administrative labels, identical across B1/B2/B3. B1 ignores them. B2 and B3 score
+# with them, so the comparison still isolates the scheduler rather than the map.
+topology:
+  leecher:
+    siteId: hq
+    networkGroupId: floor-2
+  seeders:
+    - { siteId: hq, networkGroupId: floor-2 }
+    - { siteId: hq, networkGroupId: floor-2 }
+    - { siteId: hq, networkGroupId: floor-9 }
+    - { siteId: hq, networkGroupId: floor-9 }
+    - { siteId: branch, networkGroupId: wifi }
+    - { siteId: branch, networkGroupId: wifi }
+    - { siteId: branch, networkGroupId: dc }
+    - { siteId: branch, networkGroupId: dc }
+
 # The only section that differs between b1, b2, and b3. Everything above this line must
 # stay identical across the three files, or a difference in the results would have more
 # than one possible cause and the comparison would not isolate the scheduler.
