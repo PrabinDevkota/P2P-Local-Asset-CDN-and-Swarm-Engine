@@ -274,7 +274,7 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
                 return;
             }
             if (thisBlock) {
-                current = new InFlight(arriving.chunkIndex(), arriving.blockOffset(), false);
+                current = new InFlight(arriving.chunkIndex(), arriving.blockOffset(), false, arriving.issuedAtNanos());
             }
             tracker.findBySpan(block.chunkIndex(), block.blockOffset(), block.blockLength())
                     .ifPresent(request -> {
@@ -316,6 +316,7 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
         RequestTracker.Outstanding request = refused.get();
         BlockPlan.Block block = blockOf(request);
         if (countAttempt(ctx, block, "refused")) {
+            events.blockFailed();
             plan.requeue(block);
             requestMore(ctx);
         }
@@ -367,11 +368,11 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
         if (matched.isEmpty()) {
             // Cancelled or timed out: the bytes are late, so read past them and forget them.
             blocksIgnoredAsLate++;
-            current = new InFlight(begin.chunkIndex(), begin.blockOffset(), false);
+            current = new InFlight(begin.chunkIndex(), begin.blockOffset(), false, 0L);
             return;
         }
         inventory.requireInRange(begin.chunkIndex(), begin.blockOffset(), begin.blockLength());
-        current = new InFlight(begin.chunkIndex(), begin.blockOffset(), true);
+        current = new InFlight(begin.chunkIndex(), begin.blockOffset(), true, matched.get().issuedAtNanos());
     }
 
     private void onBlockData(ChannelHandlerContext ctx, BlockStream.Data data) {
@@ -402,6 +403,8 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
         }
         tracker.complete(end.requestId());
         bytesReceived += end.blockLength();
+        events.blockCompleted(end.blockLength(),
+                Duration.ofNanos(Math.max(0L, System.nanoTime() - finished.issuedAtNanos())));
         // These bytes are ours, so any second peer fetching the same block can stop.
         plan.completed(new BlockPlan.Block(
                 finished.chunkIndex(), finished.blockOffset(), end.blockLength()));
@@ -463,6 +466,7 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
             if (!countAttempt(ctx, block, "timed out")) {
                 return;
             }
+            events.blockFailed();
             plan.requeue(block);
         }
         requestMore(ctx);
@@ -586,7 +590,7 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
         void run() throws Exception;
     }
 
-    private record InFlight(int chunkIndex, int blockOffset, boolean accepted) {
+    private record InFlight(int chunkIndex, int blockOffset, boolean accepted, long issuedAtNanos) {
     }
 
     /**
