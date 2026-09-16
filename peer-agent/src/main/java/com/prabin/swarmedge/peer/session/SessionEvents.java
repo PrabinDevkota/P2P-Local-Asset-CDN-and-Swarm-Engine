@@ -1,5 +1,7 @@
 package com.prabin.swarmedge.peer.session;
 
+import java.time.Duration;
+
 /**
  * What one session tells its owner while it runs.
  *
@@ -35,4 +37,15 @@ public interface SessionEvents {
 
     /** This session verified a chunk into the store, so it is ours to serve now. */
     void chunkStored(int chunkIndex);
+
+    /**
+     * A requested block arrived whole. {@code elapsed} is wall time from issuing the
+     * request to the last byte, which is what goodput and RTT are measured from.
+     */
+    default void blockCompleted(int bytes, Duration elapsed) {
+    }
+
+    /** A request timed out, was refused, or otherwise failed to deliver. */
+    default void blockFailed() {
+    }
 }
