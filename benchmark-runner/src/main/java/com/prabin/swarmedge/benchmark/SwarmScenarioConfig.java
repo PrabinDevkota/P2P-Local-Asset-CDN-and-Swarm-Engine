@@ -1,6 +1,7 @@
 package com.prabin.swarmedge.benchmark;
 
 import com.prabin.swarmedge.peer.laps.LapsWeights;
+import com.prabin.swarmedge.common.locality.Locality;
 import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.SafeConstructor;
@@ -56,7 +57,9 @@ public record SwarmScenarioConfig(
         LapsWeights lapsWeights,
         int endgameThresholdBlocks,
         List<Double> killFractions,
-        boolean everyPeerHoldsEverything
+        boolean everyPeerHoldsEverything,
+        Locality leecherLocality,
+        List<Locality> seederLocalities
 ) {
 
     /**
@@ -103,6 +106,19 @@ public record SwarmScenarioConfig(
         Objects.requireNonNull(connectTimeout, "swarm.connectTimeoutMillis");
         Objects.requireNonNull(stallTimeout, "swarm.stallTimeoutMillis");
         killFractions = List.copyOf(Objects.requireNonNull(killFractions, "churn.killFractions"));
+        seederLocalities = List.copyOf(seederLocalities == null ? List.of() : seederLocalities);
+        Objects.requireNonNull(sourcePolicy, "scheduler.sourcePolicy");
+        if (!seederLocalities.isEmpty() && seederLocalities.size() != seederCount) {
+            throw new IllegalArgumentException("topology.seeders must list one locality per seeder, got "
+                    + seederLocalities.size() + " for seederCount " + seederCount);
+        }
+        if (sourcePolicy != SourcePolicy.AS_DISCOVERED && seederLocalities.isEmpty()) {
+            throw new IllegalArgumentException("topology.seeders is required under " + sourcePolicy
+                    + ", otherwise source choice has no labels to act on");
+        }
+        if (sourcePolicy != SourcePolicy.AS_DISCOVERED && leecherLocality == null) {
+            throw new IllegalArgumentException("topology.leecher is required under " + sourcePolicy);
+        }
         if (fileName.contains("/") || fileName.contains("\\") || fileName.contains("..")) {
             throw new IllegalArgumentException("asset.fileName must be a plain name");
         }
@@ -113,7 +129,6 @@ public record SwarmScenarioConfig(
             throw new IllegalArgumentException("swarm.stallTimeoutMillis must outlast swarm.blockTimeoutMillis,"
                     + " or one slow block reads as a dead swarm");
         }
-        Objects.requireNonNull(sourcePolicy, "scheduler.sourcePolicy");
         if (endgameThresholdBlocks < 0) {
             throw new IllegalArgumentException("scheduler.endgameThresholdBlocks cannot be negative");
         }
@@ -187,7 +202,9 @@ public record SwarmScenarioConfig(
                 weights(scheduler, policy),
                 (int) number(scheduler, "endgameThresholdBlocks"),
                 fractions(churn, "killFractions"),
-                bool(churn, "everyPeerHoldsEverything"));
+                bool(churn, "everyPeerHoldsEverything"),
+                topologyLeecher(root),
+                topologySeeders(root));
     }
 
     private static SourcePolicy policy(Map<String, Object> scheduler) {
@@ -308,5 +325,55 @@ public record SwarmScenarioConfig(
         if (value <= 0) {
             throw new IllegalArgumentException(name + " must be positive");
         }
+    }
+
+    private static Locality topologyLeecher(Map<String, Object> root) {
+        Map<String, Object> topology = optionalSection(root, "topology");
+        if (topology == null) {
+            return null;
+        }
+        return locality(section(topology, "leecher"), "topology.leecher");
+    }
+
+    private static List<Locality> topologySeeders(Map<String, Object> root) {
+        Map<String, Object> topology = optionalSection(root, "topology");
+        if (topology == null) {
+            return List.of();
+        }
+        Object value = topology.get("seeders");
+        if (!(value instanceof List<?> list)) {
+            throw new IllegalArgumentException("topology.seeders must be a list");
+        }
+        List<Locality> seeders = new ArrayList<>(list.size());
+        for (int i = 0; i < list.size(); i++) {
+            Object element = list.get(i);
+            if (!(element instanceof Map<?, ?> map)) {
+                throw new IllegalArgumentException("topology.seeders[" + i + "] must be a mapping");
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> labels = (Map<String, Object>) map;
+            seeders.add(locality(labels, "topology.seeders[" + i + "]"));
+        }
+        return seeders;
+    }
+
+    private static Locality locality(Map<String, Object> map, String where) {
+        try {
+            return new Locality(string(map, "siteId"), string(map, "networkGroupId"));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException(where + ": " + e.getMessage(), e);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> optionalSection(Map<String, Object> root, String name) {
+        Object value = root.get(name);
+        if (value == null) {
+            return null;
+        }
+        if (!(value instanceof Map<?, ?> map)) {
+            throw new IllegalArgumentException("section " + name + " must be a mapping");
+        }
+        return (Map<String, Object>) map;
     }
 }
