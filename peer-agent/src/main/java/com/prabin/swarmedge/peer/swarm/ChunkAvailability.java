@@ -90,6 +90,17 @@ public final class ChunkAvailability {
         }
     }
 
+    public synchronized List<Integer> holdersOf(int chunkIndex) {
+        requireKnownChunk(chunkIndex);
+        List<Integer> ids = new ArrayList<>();
+        for (Map.Entry<Integer, byte[]> entry : advertised.entrySet()) {
+            if (ChunkBitfield.get(entry.getValue(), chunkIndex)) {
+                ids.add(entry.getKey());
+            }
+        }
+        return List.copyOf(ids);
+    }
+
     public synchronized int holders(int chunkIndex) {
         requireKnownChunk(chunkIndex);
         return holders[chunkIndex];
