@@ -1,0 +1,33 @@
+# Baseline B4: same origin download as B0, with the cache kept warm.
+# The comparison is B0 (cold) against this (warm). Nothing here is a target
+# or a claim; origin bytes and cache bytes come out of a run.
+scenarioId: b4-warm-cache
+baseline: B4
+description: Repeats share one chunk store so later runs are satisfied from cache.
+
+asset:
+  productId: game-x
+  version: 1.4.0
+  fileName: game-x-1.4.0.bin
+  # 64 MiB keeps a smoke run under a minute. The blueprint's standard asset is 1 GiB.
+  sizeBytes: 67108864
+  chunkSizeBytes: 4194304
+
+run:
+  repetitions: 3
+  seed: 20260912
+  # The only scheduler-level difference from B0: the store survives between repeats.
+  coldCache: false
+
+origin:
+  maxAttempts: 3
+  initialBackoffMillis: 200
+  maxBackoffMillis: 5000
+  connectTimeoutMillis: 5000
+  requestTimeoutMillis: 60000
+
+# Experiment input, not a performance target. Unlimited would hide eviction from the
+# run record; a 1 GiB ceiling is larger than the 64 MiB asset so B4 still shows reuse.
+cache:
+  maxBytes: 1073741824
+  minFreeBytes: 0

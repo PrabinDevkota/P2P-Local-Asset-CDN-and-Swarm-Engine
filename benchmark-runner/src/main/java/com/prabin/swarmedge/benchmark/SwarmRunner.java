@@ -5,6 +5,7 @@ import com.prabin.swarmedge.common.id.Hex;
 import com.prabin.swarmedge.common.id.PeerId;
 import com.prabin.swarmedge.common.locality.Locality;
 import com.prabin.swarmedge.manifest.AssetMaterializer;
+import com.prabin.swarmedge.manifest.ChunkCache;
 import com.prabin.swarmedge.manifest.ChunkEntry;
 import com.prabin.swarmedge.manifest.ChunkStore;
 import com.prabin.swarmedge.manifest.ReleaseManifest;
@@ -108,35 +109,37 @@ public final class SwarmRunner {
                         seeders.get(i).address(), seederPeerId(i), seederLocality(i)));
             }
 
-            ChunkStore store = new ChunkStore(storeRoot);
-            ChunkInventory inventory = new ChunkInventory(manifest, store);
-            Path output = workDir.resolve(runId).resolve(manifest.fileName());
+            try (ChunkCache cache = ChunkCache.open(storeRoot)) {
+                ChunkStore store = cache.store();
+                ChunkInventory inventory = new ChunkInventory(manifest, store);
+                Path output = workDir.resolve(runId).resolve(manifest.fileName());
 
-            long startedAt = System.nanoTime();
-            SwarmDownloader.Result result;
-            PeerSelector selector = selectorOrNull();
-            try (ChunkAssembler assembler = new ChunkAssembler(inventory, store,
-                    workDir.resolve(runId).resolve("staging"));
-                 SwarmDownloader swarm = new SwarmDownloader(swarmSettings(), inventory, assembler, selector)) {
+                long startedAt = System.nanoTime();
+                SwarmDownloader.Result result;
+                PeerSelector selector = selectorOrNull();
+                try (ChunkAssembler assembler = new ChunkAssembler(inventory, store,
+                        workDir.resolve(runId).resolve("staging"));
+                     SwarmDownloader swarm = new SwarmDownloader(swarmSettings(), inventory, assembler, selector)) {
 
-                var asset = selector == null
-                        ? swarm.start(candidates.stream().map(PeerSelector.Candidate::address).toList())
-                        : swarm.startPreferring(candidates);
-                killPeers(seeders, killFraction, runIndex);
-                result = await(asset);
+                    var asset = selector == null
+                            ? swarm.start(candidates.stream().map(PeerSelector.Candidate::address).toList())
+                            : swarm.startPreferring(candidates);
+                    killPeers(seeders, killFraction, runIndex);
+                    result = await(asset);
+                }
+                new AssetMaterializer(store).materialize(manifest.chunks(), output);
+                long elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000;
+
+                long peerBytes = seeders.stream()
+                        .mapToLong(seeder -> seeder.lastSession().map(session -> session.bytesSent()).orElse(0L))
+                        .sum();
+                RunResult run = new RunResult(runId, killFraction, sha256OfFile(output), Files.size(output),
+                        peerBytes, result.peersDialled(), result.peersLost(), elapsedMillis);
+                log.info("{} run {} asset={} peerBytes={} peersLost={} elapsedMs={}",
+                        config.baseline(), runId, run.assetSha256(), run.peerBytes(), run.peersLost(),
+                        run.elapsedMillis());
+                return run;
             }
-            new AssetMaterializer(store).materialize(manifest.chunks(), output);
-            long elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000;
-
-            long peerBytes = seeders.stream()
-                    .mapToLong(seeder -> seeder.lastSession().map(session -> session.bytesSent()).orElse(0L))
-                    .sum();
-            RunResult run = new RunResult(runId, killFraction, sha256OfFile(output), Files.size(output),
-                    peerBytes, result.peersDialled(), result.peersLost(), elapsedMillis);
-            log.info("{} run {} asset={} peerBytes={} peersLost={} elapsedMs={}",
-                    config.baseline(), runId, run.assetSha256(), run.peerBytes(), run.peersLost(),
-                    run.elapsedMillis());
-            return run;
         } finally {
             seeders.forEach(SeederServer::close);
         }
