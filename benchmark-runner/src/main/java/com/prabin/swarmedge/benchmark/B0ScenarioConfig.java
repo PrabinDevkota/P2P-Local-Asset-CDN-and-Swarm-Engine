@@ -1,5 +1,6 @@
 package com.prabin.swarmedge.benchmark;
 
+import com.prabin.swarmedge.manifest.CacheEvictor;
 import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.SafeConstructor;
@@ -14,7 +15,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * Parsed form of a B0 scenario file such as {@code research/configs/b0-origin-only.yaml}.
+ * Parsed form of a B0 or B4 scenario file such as {@code research/configs/b0-origin-only.yaml}.
  *
  * <p>A config describes an experiment; it never describes an expected result.
  * Every field here is an input that must be preserved with the run so the run
@@ -35,7 +36,8 @@ public record B0ScenarioConfig(
         Duration initialBackoff,
         Duration maxBackoff,
         Duration connectTimeout,
-        Duration requestTimeout
+        Duration requestTimeout,
+        CacheEvictor.Settings cache
 ) {
 
     public B0ScenarioConfig {
@@ -52,6 +54,7 @@ public record B0ScenarioConfig(
         Objects.requireNonNull(maxBackoff, "origin.maxBackoffMillis");
         Objects.requireNonNull(connectTimeout, "origin.connectTimeoutMillis");
         Objects.requireNonNull(requestTimeout, "origin.requestTimeoutMillis");
+        cache = cache == null ? CacheEvictor.Settings.unlimited() : cache;
         if (fileName.contains("/") || fileName.contains("\\") || fileName.contains("..")) {
             throw new IllegalArgumentException("asset.fileName must be a plain name");
         }
@@ -87,7 +90,21 @@ public record B0ScenarioConfig(
                 millis(origin, "initialBackoffMillis"),
                 millis(origin, "maxBackoffMillis"),
                 millis(origin, "connectTimeoutMillis"),
-                millis(origin, "requestTimeoutMillis"));
+                millis(origin, "requestTimeoutMillis"),
+                cache(root));
+    }
+
+    private static CacheEvictor.Settings cache(Map<String, Object> root) {
+        Object value = root.get("cache");
+        if (value == null) {
+            return CacheEvictor.Settings.unlimited();
+        }
+        if (!(value instanceof Map<?, ?> map)) {
+            throw new IllegalArgumentException("section cache must be a mapping");
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> cache = (Map<String, Object>) map;
+        return new CacheEvictor.Settings(number(cache, "maxBytes"), number(cache, "minFreeBytes"));
     }
 
     /** Scenario files are repository content, but a loader that can build arbitrary classes is not. */

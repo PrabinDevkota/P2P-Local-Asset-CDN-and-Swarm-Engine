@@ -1,5 +1,6 @@
 package com.prabin.swarmedge.benchmark;
 
+import com.prabin.swarmedge.manifest.CacheEvictor;
 import org.junit.jupiter.api.Test;
 
 import java.io.StringReader;
@@ -27,9 +28,38 @@ class B0ScenarioConfigTest {
         assertThat(config.baseline()).isEqualTo("B0");
         assertThat(config.repetitions()).isEqualTo(3);
         assertThat(config.coldCache()).isTrue();
+        assertThat(config.cache().isUnlimited()).isTrue();
         assertThat(config.chunkSizeBytes()).isEqualTo(4 * 1024 * 1024);
         assertThat(config.initialBackoff()).isEqualTo(Duration.ofMillis(200));
         assertThat(config.requestTimeout()).isEqualTo(Duration.ofSeconds(60));
+    }
+
+    @Test
+    void theCommittedB4ConfigIsB0WithAWarmCache() throws Exception {
+        Path b4 = Path.of("..", "research", "configs", "b4-warm-cache.yaml");
+        assertThat(Files.isRegularFile(b4))
+                .as("research/configs/b4-warm-cache.yaml must stay in the repository")
+                .isTrue();
+
+        B0ScenarioConfig origin = B0ScenarioConfig.load(COMMITTED_CONFIG);
+        B0ScenarioConfig warm = B0ScenarioConfig.load(b4);
+
+        assertThat(warm.scenarioId()).isEqualTo("b4-warm-cache");
+        assertThat(warm.baseline()).isEqualTo("B4");
+        assertThat(warm.coldCache()).isFalse();
+        assertThat(warm.cache()).isEqualTo(new CacheEvictor.Settings(1073741824L, 0L));
+        assertThat(warm.productId()).isEqualTo(origin.productId());
+        assertThat(warm.version()).isEqualTo(origin.version());
+        assertThat(warm.fileName()).isEqualTo(origin.fileName());
+        assertThat(warm.sizeBytes()).isEqualTo(origin.sizeBytes());
+        assertThat(warm.chunkSizeBytes()).isEqualTo(origin.chunkSizeBytes());
+        assertThat(warm.repetitions()).isEqualTo(origin.repetitions());
+        assertThat(warm.seed()).isEqualTo(origin.seed());
+        assertThat(warm.maxAttempts()).isEqualTo(origin.maxAttempts());
+        assertThat(warm.initialBackoff()).isEqualTo(origin.initialBackoff());
+        assertThat(warm.maxBackoff()).isEqualTo(origin.maxBackoff());
+        assertThat(warm.connectTimeout()).isEqualTo(origin.connectTimeout());
+        assertThat(warm.requestTimeout()).isEqualTo(origin.requestTimeout());
     }
 
     @Test
