@@ -87,6 +87,46 @@ class ChunkInventoryTest {
     }
 
     @Test
+    void aRestartRebuildsTheBitfieldFromTheIndexAndTheFiles() throws Exception {
+        try (com.prabin.swarmedge.manifest.ChunkIndex index =
+                     com.prabin.swarmedge.manifest.ChunkIndex.open(tempDir.resolve("cache.db"))) {
+            store = new ChunkStore(tempDir.resolve("data"), index);
+            cache(0);
+            cache(2);
+            cache(5);
+        }
+        try (com.prabin.swarmedge.manifest.ChunkIndex index =
+                     com.prabin.swarmedge.manifest.ChunkIndex.open(tempDir.resolve("cache.db"))) {
+            ChunkStore restarted = new ChunkStore(tempDir.resolve("data"), index);
+            ChunkInventory inventory = new ChunkInventory(manifest, restarted);
+
+            assertThat(inventory.has(0)).isTrue();
+            assertThat(inventory.has(1)).isFalse();
+            assertThat(inventory.has(2)).isTrue();
+            assertThat(inventory.has(5)).isTrue();
+            assertThat(inventory.missing()).containsExactly(1, 3, 4);
+        }
+    }
+
+    @Test
+    void anUnverifiedFileIsNotAdvertisedEvenIfItIsStillOnDisk() throws Exception {
+        try (com.prabin.swarmedge.manifest.ChunkIndex index =
+                     com.prabin.swarmedge.manifest.ChunkIndex.open(tempDir.resolve("cache.db"))) {
+            store = new ChunkStore(tempDir.resolve("data"), index);
+            cache(0);
+            Files.write(store.pathFor(manifest.chunks().get(0).sha256()), new byte[] {9, 9});
+            assertThatThrownBy(() -> store.read(manifest.chunks().get(0).sha256()))
+                    .isInstanceOf(IllegalArgumentException.class);
+
+            ChunkInventory inventory = new ChunkInventory(manifest, store);
+
+            assertThat(store.contains(manifest.chunks().get(0).sha256())).isTrue();
+            assertThat(inventory.has(0)).isFalse();
+            assertThat(inventory.missing()).contains(0);
+        }
+    }
+
+    @Test
     void whatWeHoldIsReadOnceSoNoRequestHasToTouchTheDisk() throws Exception {
         ChunkInventory inventory = new ChunkInventory(manifest, store);
         cache(1);
