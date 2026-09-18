@@ -100,6 +100,7 @@ class B0RunnerTest {
             assertThat(summary.assetHashesMatch()).isTrue();
             assertThat(summary.runs().get(0).originBytes()).isEqualTo(original.length);
             assertThat(summary.runs().get(1).originBytes()).isZero();
+            assertThat(summary.runs().get(1).cacheBytes()).isEqualTo(original.length);
             assertThat(summary.runs().get(2).chunksReused()).isEqualTo(TOTAL_CHUNKS);
         }
     }

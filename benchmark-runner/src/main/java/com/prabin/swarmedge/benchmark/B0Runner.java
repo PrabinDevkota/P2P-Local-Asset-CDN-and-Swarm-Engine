@@ -2,7 +2,7 @@ package com.prabin.swarmedge.benchmark;
 
 import com.prabin.swarmedge.common.id.Hex;
 import com.prabin.swarmedge.manifest.AssetMaterializer;
-import com.prabin.swarmedge.manifest.ChunkStore;
+import com.prabin.swarmedge.manifest.ChunkCache;
 import com.prabin.swarmedge.manifest.ReleaseManifest;
 import com.prabin.swarmedge.peer.origin.OriginDownloader;
 import org.slf4j.Logger;
@@ -20,11 +20,11 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Baseline B0: repeat an origin-only download and record what each run cost.
+ * Baseline B0 and B4: repeat an origin-only download and record what each run cost.
  *
- * <p>The runner measures; it does not judge. It asserts nothing about throughput
- * or offload, and the only correctness claim it makes is the one the blueprint
- * demands: every repetition must rebuild a byte-identical asset.
+ * <p>B0 is a cold cache every repetition. B4 keeps the store, so later repetitions
+ * should show origin bytes dropping and cache bytes rising. The runner measures;
+ * it does not judge. It asserts nothing about throughput or offload.
  */
 public final class B0Runner {
 
@@ -52,27 +52,31 @@ public final class B0Runner {
             Path storeRoot = config.coldCache() ? workDir.resolve(runId).resolve("store") : sharedStore;
             Path output = workDir.resolve(runId).resolve(manifest.fileName());
 
-            ChunkStore store = new ChunkStore(storeRoot);
-            OriginDownloader downloader = new OriginDownloader(originBaseUri, store, settings(runId), Thread::sleep);
+            try (ChunkCache cache = ChunkCache.open(storeRoot, config.cache())) {
+                OriginDownloader downloader = new OriginDownloader(originBaseUri, cache.store(),
+                        settings(runId), Thread::sleep);
 
-            long startedAt = System.nanoTime();
-            OriginDownloader.Result result = downloader.download(manifest);
-            new AssetMaterializer(store).materialize(manifest.chunks(), output);
-            long elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000;
+                long startedAt = System.nanoTime();
+                OriginDownloader.Result result = downloader.download(manifest);
+                new AssetMaterializer(cache.store()).materialize(manifest.chunks(), output);
+                long elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000;
 
-            RunResult run = new RunResult(
-                    repetition,
-                    runId,
-                    sha256OfFile(output),
-                    Files.size(output),
-                    result.bytesReceived(),
-                    result.chunksDownloaded(),
-                    result.chunksAlreadyCached(),
-                    result.retries(),
-                    elapsedMillis);
-            log.info("B0 run {} asset={} originBytes={} elapsedMs={}",
-                    runId, run.assetSha256(), run.originBytes(), run.elapsedMillis());
-            runs.add(run);
+                RunResult run = new RunResult(
+                        repetition,
+                        runId,
+                        sha256OfFile(output),
+                        Files.size(output),
+                        result.bytesReceived(),
+                        result.bytesReused(),
+                        result.chunksDownloaded(),
+                        result.chunksAlreadyCached(),
+                        result.retries(),
+                        elapsedMillis);
+                log.info("{} run {} asset={} originBytes={} cacheBytes={} elapsedMs={}",
+                        config.baseline(), runId, run.assetSha256(), run.originBytes(), run.cacheBytes(),
+                        run.elapsedMillis());
+                runs.add(run);
+            }
         }
         return new Summary(config.scenarioId(), config.baseline(), config.seed(), List.copyOf(runs));
     }
@@ -113,6 +117,7 @@ public final class B0Runner {
             String assetSha256,
             long assetBytes,
             long originBytes,
+            long cacheBytes,
             int chunksDownloaded,
             int chunksReused,
             int retries,
@@ -136,6 +141,10 @@ public final class B0Runner {
 
         public long totalOriginBytes() {
             return runs.stream().mapToLong(RunResult::originBytes).sum();
+        }
+
+        public long totalCacheBytes() {
+            return runs.stream().mapToLong(RunResult::cacheBytes).sum();
         }
     }
 }
