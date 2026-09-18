@@ -24,7 +24,7 @@ Legend: `[x]` done, `[~]` partial, `[ ]` not started.
 
 A row reaches the index only after the bytes hashed and the file was committed, so staging can never look cached. A chunk that fails a re-hash is marked unverified and stops counting as cached. See [ADR-005](adr/ADR-005-chunk-index.md).
 
-Not covered: a `>2 GiB` chunker case, and eviction itself (the index exposes candidates; Phase 7 acts on them).
+Not covered: a `>2 GiB` chunker case. Eviction and warm start are Phase 7.
 
 ## Phase 2 — Origin baseline (B0) — done
 
@@ -122,8 +122,21 @@ Found and fixed on review of this phase:
 
 - A swarm that assembled a bad chunk blamed whoever delivered the last block and closed that session. In a swarm that block is one slice of a file many peers wrote, so the honest source was the one most likely to be dropped. The chunk is now rebuilt on the shared queue; stale disk writes from the failed round cannot seed the retry; a session is only closed for this if it is the sole source, or if it keeps assembling mismatches.
 
+## Phase 7 — Persistent cache and cross-version reuse — done
+
+- [x] P7-01 Cache lookup before network: `ChunkStore.hasVerified` + origin/swarm skip
+- [x] P7-02 `CacheEvictor`: LRU, quota, min-free-space; referenced and just-committed chunks stay
+- [x] P7-03 Warm-start inventory from the index and files, without re-hashing; `reconcileIndex` if the database lagged
+- [x] P7-04 `research/configs/b4-warm-cache.yaml`: same asset as B0, warm store, origin and cache byte accounting
+
+The store and index already existed. What this phase adds is the policy that uses them. A cache hit is a verified file whose index row is not flagged bad; it bumps LRU and costs no network bytes. An unverified row is fetched again even if the file is still sitting there. Eviction only considers verified, unreferenced chunks, oldest first, and will sit over quota rather than delete a retained release. A restart rebuilds the bitfield from `isCached` — files plus the verified flag — and never walks SHA-256 over the warehouse to do it.
+
+B4 is B0 with `coldCache: false` and a recorded cache ceiling. The first repetition still pays origin; later ones must show origin bytes at zero and cache bytes covering the asset. No offload percentage is asserted.
+
+Not covered in this phase: EDGE / origin fallback (Phase 8), shrinking the request window, and immutable `research/raw/` folders (P10-03).
+
 ## Not started
 
-- Phases 7–12 as in the blueprint
+- Phases 8–12 as in the blueprint
 
 Peers must call `ManifestVerifier` with a trusted public key. `ManifestJson.parse` only checks JSON shape.

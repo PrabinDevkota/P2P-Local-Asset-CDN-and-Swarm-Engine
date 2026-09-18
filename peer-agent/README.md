@@ -12,7 +12,7 @@ Netty data plane (LEECHER / SEEDER / EDGE). Speaks [protocol v1](../docs/protoco
 
 `OriginDownloader` pulls an asset from origin over HTTP: one ranged `GET` per chunk, hashed against the signed manifest before it reaches the `ChunkStore`. The caller must have verified the manifest with `ManifestVerifier` first — this class treats origin exactly like an untrusted peer.
 
-- **Resume** is a side effect of content addressing: a chunk already in the store is skipped.
+- **Resume** is a cache lookup: `ChunkStore.hasVerified` skips a chunk that is on disk and still verified, so a warm cache pulls no origin bytes. An unverified row is fetched again.
 - **Retry** is exponential with a cap. Bad bytes and transport errors are retried the same way, then fail closed.
 - **Accounting**: pass a `runId` in the settings and the origin fixture bills those bytes to that run.
 
@@ -78,6 +78,8 @@ Rules worth remembering when editing this module:
 - A BLOCK is only accepted against a request we issued, with matching chunk, offset, and length. Late data is dropped quietly; unsolicited data closes the connection.
 - A chunk is advertised only after it verifies. Staging bytes are never visible to `ChunkInventory`.
 
-Not wired yet: `SwarmNode` still has no CLI to point a seeder at a manifest, and the token in HELLO is carried but not verified (`PeerAuthPolicy` is where that lands).
+## Persistent cache (Phase 7)
 
-The gap to close first: nothing records into `PeerMetrics` from a live session. `PeerSelector` keeps the history and `LeecherHandler` knows when a block landed, but the two are not connected, so a real run scores on locality alone and B3 behaves like B2. Everything else about LAPS is built and tested; this is the wire that makes it mean something.
+`ChunkCache` opens the store together with `cache.db` so a restart sees what was verified. `ChunkInventory` rebuilds its bitfield from `isCached` — the index plus file existence — without re-hashing the warehouse. `CacheEvictor` deletes LRU unreferenced chunks down to a quota and a min-free-space floor; a referenced or just-committed chunk is not deleted to make the numbers look tidy.
+
+Not wired yet: `SwarmNode` still has no CLI to point a seeder at a manifest, and the token in HELLO is carried but not verified (`PeerAuthPolicy` is where that lands).

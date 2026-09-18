@@ -8,7 +8,7 @@ This is an engineering system and a research testbed. The first paper focuses on
 
 ## Status
 
-Phases **0–6 are done** against the blueprint backlog. `./mvnw verify` is the gate and is green. **Phase 7** (persistent cache, eviction, warm start, baseline B4) is next.
+Phases **0–7 are done** against the blueprint backlog. `./mvnw verify` is the gate and is green. **Phase 8** (EDGE role + progressive fallback) is next.
 
 | Phase | State | What it is |
 | --- | --- | --- |
@@ -19,8 +19,9 @@ Phases **0–6 are done** against the blueprint backlog. `./mvnw verify` is the 
 | 4 | Done | Two peers over Netty: HELLO → BITFIELD → REQUEST/BLOCK → hash the whole chunk → `putVerified`. Fuzz and bounds suites included |
 | 5 | Done | Baseline B1: dial up to 8 peers, rarest-first over counted availability, one shared block queue, HAVE broadcast, churn smoke |
 | 6 | Done | Shared locality classes, EWMA goodput/RTT, LAPS scoring and dial order, endgame duplicates, configs for B1/B2/B3 |
-| 7 | Next | Cache lookup before network, LRU/quota eviction, warm-start inventory, baseline B4 |
-| 7+ | Later | Persistent cache, EDGE, progressive fallback, experiment harness |
+| 7 | Done | Cache lookup before network, LRU/quota eviction, warm-start inventory, baseline B4 |
+| 8 | Next | EDGE role + progressive fallback with jitter |
+| 8+ | Later | Security hardening, experiment harness, FastCDC |
 
 Trust rules that must not drift:
 
@@ -204,7 +205,7 @@ Two stages, kept separate for experiments:
 - **A — which chunk/block?** Rarest-first with a seeded tie-break, plus endgame duplication to at most two sources — **done** (`ChunkAvailability` + `SwarmScheduler`).
 - **B — which source?** Locality-only (B2) and **LAPS** (B3) — **done** (`LapsScorer` + `PeerSelector`). Live sessions record observed goodput, RTT, and health into `PeerMetrics`, and the scheduler prefers a better-scoring peer while that peer still has pipeline room.
 
-Source priority (later): local verified cache → healthy local peers → same-site EDGE → limited origin.
+Source priority now starts with a **verified local cache** (Phase 7). Later rungs — same-site EDGE, then limited origin — are Phase 8.
 
 ## Explicit non-goals (v1)
 

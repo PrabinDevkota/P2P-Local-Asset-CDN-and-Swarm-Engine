@@ -2,7 +2,7 @@
 
 Task IDs are the blueprint's backlog IDs (§16). `./mvnw verify` is the gate for every step.
 
-Phases 0–6 are complete. **Phase 7 (persistent cache, eviction, warm start, baseline B4) is next.**
+Phases 0–7 are complete. **Phase 8 (EDGE role + progressive fallback) is next.**
 
 ## What exists
 
@@ -85,9 +85,15 @@ Blueprint backlog (§16):
 | P7-03 | Warm-start inventory | An agent restart rebuilds its bitfield from the cache index and files |
 | P7-04 | B4 warm-cache experiment | Peer and origin byte accounting shows reuse, with no invented target |
 
-The store and its SQLite index already exist from P1-04; what is missing is the policy that uses them. `refCount` and `lastAccess` are recorded but nothing acts on either, so the cache currently grows without bound.
+The store and its SQLite index already existed from P1-04. What this phase added is the policy that uses them.
 
-## Carried forward (not blocking Phase 7)
+All four are done. `ChunkStore.hasVerified` is the lookup before network; `CacheEvictor` deletes LRU unreferenced chunks down to quota and min-free-space without touching pinned rows; a restart rebuilds the bitfield from the index plus file existence; `b4-warm-cache.yaml` is B0 with a warm store so origin and cache bytes can be compared.
+
+## Phase 8 — EDGE role + progressive fallback (`peer-agent/`)
+
+Next. Local verified cache is now the first source. What is still missing is site EDGE and origin as later rungs, with jittered fallback timers so a flash crowd does not slam origin together.
+
+## Carried forward (not blocking Phase 8)
 
 These are blueprint items whose phase is closed but which later phases assume.
 
@@ -96,12 +102,11 @@ These are blueprint items whose phase is closed but which later phases assume.
 | Actuator health + Prometheus on the tracker | §10.1 | Phase 10 observability |
 | Announce rate limiting (`rate:{peerId}:announce`) | §10.2, §11.2 | Phase 9 abuse controls |
 | Immutable raw run folders under `research/raw/` | §13.3 | P10-03 |
-| Cache eviction acting on `ChunkIndex` candidates | §9.1 | P7-02 |
 | `docs/architecture.md`, `docs/experiment-method.md` | §14 | Before the paper draft |
 
 ## Later (do not pull forward)
 
-- Phase 8 EDGE role + progressive fallback with jitter
+- Phase 8 EDGE role + progressive fallback with jitter — **next**, do not skip it
 - Phase 9 security hardening (sequence/rollback, reputation, log audit)
 - Phase 10 experiment harness; Phase 11 FastCDC; Phase 12 release
 - No invented Mbps or offload %
