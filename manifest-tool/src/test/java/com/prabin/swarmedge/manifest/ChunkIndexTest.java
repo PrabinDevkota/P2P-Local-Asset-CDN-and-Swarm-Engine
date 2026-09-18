@@ -121,6 +121,34 @@ class ChunkIndexTest {
     }
 
     @Test
+    void ensurePresentDoesNotLookLikeACacheHit() throws Exception {
+        String hash = sha256Hex(new byte[] {9});
+        try (ChunkIndex index = openAt(T0)) {
+            index.recordVerified(hash, 1, tempDir.resolve("a.chunk"));
+        }
+        Instant later = T0.plusSeconds(60);
+        try (ChunkIndex index = ChunkIndex.open(tempDir.resolve("cache.db"),
+                Clock.fixed(later, ZoneOffset.UTC))) {
+            index.ensurePresent(hash, 1, tempDir.resolve("a.chunk"));
+
+            assertThat(index.find(hash).orElseThrow().lastAccess()).isEqualTo(T0);
+            assertThat(index.verifiedHashes()).containsExactly(hash);
+        }
+    }
+
+    @Test
+    void hashesIncludeUnverifiedRowsSoReconcileCanDropThem() throws Exception {
+        String hash = sha256Hex(new byte[] {6});
+        try (ChunkIndex index = openAt(T0)) {
+            index.recordVerified(hash, 1, tempDir.resolve("a.chunk"));
+            index.markUnverified(hash);
+
+            assertThat(index.verifiedHashes()).isEmpty();
+            assertThat(index.hashes()).containsExactly(hash);
+        }
+    }
+
+    @Test
     void rejectsAHashThatIsNotSixtyFourHexCharacters() throws Exception {
         try (ChunkIndex index = openAt(T0)) {
             assertThatThrownBy(() -> index.find("abcd"))
