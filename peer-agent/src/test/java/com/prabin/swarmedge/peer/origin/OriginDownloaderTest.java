@@ -88,6 +88,7 @@ class OriginDownloaderTest {
             assertThat(again.chunksAlreadyCached()).isEqualTo(TOTAL_CHUNKS);
             assertThat(again.chunksDownloaded()).isZero();
             assertThat(again.bytesReceived()).isZero();
+            assertThat(again.bytesReused()).isEqualTo(original.length);
         }
     }
 
@@ -106,6 +107,7 @@ class OriginDownloaderTest {
             assertThat(result.chunksAlreadyCached()).isEqualTo(2);
             assertThat(result.chunksDownloaded()).isEqualTo(TOTAL_CHUNKS - 2);
             assertThat(result.bytesReceived()).isEqualTo((TOTAL_CHUNKS - 2L) * CHUNK_SIZE);
+            assertThat(result.bytesReused()).isEqualTo(2L * CHUNK_SIZE);
         }
     }
 
@@ -135,6 +137,26 @@ class OriginDownloaderTest {
 
             assertThat(store.contains(manifest.chunks().get(0).sha256())).isFalse();
             assertThat(sleeps).containsExactly(Duration.ofMillis(10), Duration.ofMillis(20));
+        }
+    }
+
+    @Test
+    void anUnverifiedCachedChunkIsFetchedAgain() throws Exception {
+        try (OriginHttpServer origin = new OriginHttpServer(originRoot);
+             com.prabin.swarmedge.manifest.ChunkIndex index =
+                     com.prabin.swarmedge.manifest.ChunkIndex.open(storeRoot.resolve("cache.db"))) {
+            ChunkStore store = new ChunkStore(storeRoot, index);
+            downloader(origin, settings(3), store).download(manifest);
+            String hash = manifest.chunks().get(0).sha256();
+            Files.write(store.pathFor(hash), new byte[] {9, 9, 9, 9});
+            assertThatThrownBy(() -> store.read(hash)).isInstanceOf(IllegalArgumentException.class);
+            assertThat(store.hasVerified(hash)).isFalse();
+
+            OriginDownloader.Result again = downloader(origin, settings(3), store).download(manifest);
+
+            assertThat(again.chunksDownloaded()).isEqualTo(1);
+            assertThat(again.chunksAlreadyCached()).isEqualTo(TOTAL_CHUNKS - 1);
+            assertThat(store.hasVerified(hash)).isTrue();
         }
     }
 
@@ -169,7 +191,12 @@ class OriginDownloaderTest {
 
     private OriginDownloader downloader(OriginHttpServer origin, OriginDownloader.Settings settings)
             throws Exception {
-        return new OriginDownloader(origin.baseUri(), new ChunkStore(storeRoot), settings, sleeps::add);
+        return downloader(origin, settings, new ChunkStore(storeRoot));
+    }
+
+    private OriginDownloader downloader(OriginHttpServer origin, OriginDownloader.Settings settings,
+                                        ChunkStore store) {
+        return new OriginDownloader(origin.baseUri(), store, settings, sleeps::add);
     }
 
     private static OriginDownloader.Settings settings(int maxAttempts) {
