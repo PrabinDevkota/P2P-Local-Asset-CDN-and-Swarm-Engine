@@ -113,6 +113,35 @@ public final class ChunkIndex implements AutoCloseable {
         }
     }
 
+    /**
+     * Record a file found on disk during reconcile. Inserts a new row, but does not
+     * bump {@code last_access} on a row that already exists — a restart must not
+     * look like a cache hit, or LRU eviction would forget what was actually used.
+     */
+    public synchronized void ensurePresent(String sha256Hex, long length, Path storedAt) throws IOException {
+        String hash = requireHash(sha256Hex);
+        Objects.requireNonNull(storedAt, "storedAt");
+        if (length < 0) {
+            throw new IllegalArgumentException("length must be non-negative");
+        }
+        String sql = """
+                INSERT INTO chunk (chunk_hash, length, verified, last_access, ref_count, stored_at)
+                VALUES (?, ?, 1, ?, 0, ?)
+                ON CONFLICT(chunk_hash) DO UPDATE SET
+                    length = excluded.length,
+                    verified = 1,
+                    stored_at = excluded.stored_at""";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, hash);
+            statement.setLong(2, length);
+            statement.setLong(3, now());
+            statement.setString(4, storedAt.toAbsolutePath().normalize().toString());
+            statement.executeUpdate();
+        } catch (SQLException e) {
+            throw new IOException("cannot ensure chunk " + hash, e);
+        }
+    }
+
     /** Called when a chunk is reused or served. Eviction reads this. */
     public synchronized void touch(String sha256Hex) throws IOException {
         update("UPDATE chunk SET last_access = ? WHERE chunk_hash = ?", sha256Hex, now());
@@ -138,9 +167,17 @@ public final class ChunkIndex implements AutoCloseable {
         update("UPDATE chunk SET verified = 0, last_access = ? WHERE chunk_hash = ?", sha256Hex, now());
     }
 
+    /** Every hash we have a row for, including unverified ones, so reconcile can drop ghosts. */
+    public synchronized List<String> hashes() throws IOException {
+        return listHashes("SELECT chunk_hash FROM chunk ORDER BY chunk_hash");
+    }
+
     /** Hashes a warm start may advertise, oldest access first. */
     public synchronized List<String> verifiedHashes() throws IOException {
-        String sql = "SELECT chunk_hash FROM chunk WHERE verified = 1 ORDER BY last_access, chunk_hash";
+        return listHashes("SELECT chunk_hash FROM chunk WHERE verified = 1 ORDER BY last_access, chunk_hash");
+    }
+
+    private List<String> listHashes(String sql) throws IOException {
         List<String> hashes = new ArrayList<>();
         try (PreparedStatement statement = connection.prepareStatement(sql);
              ResultSet rows = statement.executeQuery()) {
