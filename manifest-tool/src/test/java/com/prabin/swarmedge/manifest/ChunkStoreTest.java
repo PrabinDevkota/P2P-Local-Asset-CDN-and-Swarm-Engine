@@ -61,19 +61,21 @@ class ChunkStoreTest {
     }
 
     @Test
-    void rejectsCorruptExistingChunkOnPut() throws Exception {
+    void aCorruptExistingChunkIsReplacedByNewlyVerifiedBytes() throws Exception {
         byte[] data = {1, 2, 3, 4};
         String hash = sha256Hex(data);
         ChunkStore store = new ChunkStore(tempDir);
         Path saved = store.putVerified(hash, data);
         Files.write(saved, new byte[] {9, 9, 9, 9});
 
-        assertThatThrownBy(() -> store.putVerified(hash, data))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("corrupt");
         assertThatThrownBy(() -> store.read(hash))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("corrupt");
+
+        Path replaced = store.putVerified(hash, data);
+
+        assertThat(replaced).isEqualTo(saved);
+        assertThat(store.read(hash).orElseThrow()).containsExactly(data);
     }
 
     @Test
@@ -110,6 +112,88 @@ class ChunkStoreTest {
 
             assertThat(index.find(hash).orElseThrow().verified()).isFalse();
             assertThat(index.verifiedHashes()).isEmpty();
+            assertThat(store.contains(hash)).isTrue();
+            assertThat(store.isCached(hash)).isFalse();
+            assertThat(store.hasVerified(hash)).isFalse();
+        }
+    }
+
+    @Test
+    void aCacheHitTouchesLastAccessAndDoesNotReadTheFile() throws Exception {
+        byte[] data = {1, 2, 3, 4};
+        String hash = sha256Hex(data);
+        java.time.Instant storedAt;
+        try (ChunkIndex index = ChunkIndex.open(tempDir.resolve("cache.db"),
+                java.time.Clock.fixed(java.time.Instant.parse("2026-09-12T00:00:00Z"), java.time.ZoneOffset.UTC))) {
+            ChunkStore store = new ChunkStore(tempDir, index);
+            store.putVerified(hash, data);
+            storedAt = index.find(hash).orElseThrow().lastAccess();
+        }
+        try (ChunkIndex later = ChunkIndex.open(tempDir.resolve("cache.db"),
+                java.time.Clock.fixed(java.time.Instant.parse("2026-09-12T00:01:00Z"), java.time.ZoneOffset.UTC))) {
+            ChunkStore warmed = new ChunkStore(tempDir, later);
+            assertThat(warmed.hasVerified(hash)).isTrue();
+            assertThat(later.find(hash).orElseThrow().lastAccess())
+                    .isEqualTo(java.time.Instant.parse("2026-09-12T00:01:00Z"));
+            assertThat(later.find(hash).orElseThrow().lastAccess()).isAfter(storedAt);
+        }
+    }
+
+    @Test
+    void removeDeletesTheFileAndTheRow() throws Exception {
+        byte[] data = {1, 2, 3};
+        String hash = sha256Hex(data);
+        try (ChunkIndex index = ChunkIndex.open(tempDir.resolve("cache.db"))) {
+            ChunkStore store = new ChunkStore(tempDir, index);
+            Path saved = store.putVerified(hash, data);
+
+            store.remove(hash);
+
+            assertThat(saved).doesNotExist();
+            assertThat(store.contains(hash)).isFalse();
+            assertThat(index.find(hash)).isEmpty();
+        }
+    }
+
+    @Test
+    void aReferencedChunkCannotBeRemoved() throws Exception {
+        byte[] data = {4, 5, 6};
+        String hash = sha256Hex(data);
+        try (ChunkIndex index = ChunkIndex.open(tempDir.resolve("cache.db"))) {
+            ChunkStore store = new ChunkStore(tempDir, index);
+            Path saved = store.putVerified(hash, data);
+            index.retain(hash);
+
+            assertThatThrownBy(() -> store.remove(hash))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("referenced");
+            assertThat(saved).exists();
+            assertThat(index.find(hash).orElseThrow().refCount()).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void reconcileDropsGhostRowsAndIndexesOrphanFilesWithoutHashing() throws Exception {
+        byte[] kept = {1, 2};
+        byte[] orphan = {3, 4, 5};
+        String keptHash = sha256Hex(kept);
+        String orphanHash = sha256Hex(orphan);
+        String ghost = sha256Hex(new byte[] {9});
+        try (ChunkIndex index = ChunkIndex.open(tempDir.resolve("cache.db"))) {
+            ChunkStore store = new ChunkStore(tempDir, index);
+            store.putVerified(keptHash, kept);
+            index.recordVerified(ghost, 1, store.pathFor(ghost));
+            Path orphanPath = store.pathFor(orphanHash);
+            Files.createDirectories(orphanPath.getParent());
+            Files.write(orphanPath, orphan);
+
+            int changed = store.reconcileIndex();
+
+            assertThat(changed).isEqualTo(2);
+            assertThat(index.find(ghost)).isEmpty();
+            assertThat(index.find(orphanHash).orElseThrow().verified()).isTrue();
+            assertThat(index.find(orphanHash).orElseThrow().length()).isEqualTo(orphan.length);
+            assertThat(store.isCached(keptHash)).isTrue();
         }
     }
 
