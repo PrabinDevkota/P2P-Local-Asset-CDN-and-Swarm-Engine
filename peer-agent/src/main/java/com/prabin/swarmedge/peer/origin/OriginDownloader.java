@@ -25,8 +25,9 @@ import java.util.Objects;
  * chunk is hashed against the manifest before it is committed, and a mismatch is
  * retried rather than stored.
  *
- * <p>Resume is free: a chunk already in the {@link ChunkStore} is skipped, so a
- * killed download restarts where it stopped.
+ * <p>Resume is a cache lookup, not a retry: {@link ChunkStore#hasVerified} skips a
+ * chunk that is already on disk and still verified, so a killed download restarts
+ * where it stopped and a warm cache pulls no origin bytes at all (P7-01).
  */
 public final class OriginDownloader {
 
@@ -64,9 +65,11 @@ public final class OriginDownloader {
         int retries = 0;
         long received = 0;
         long verified = 0;
+        long reusedBytes = 0;
         for (ChunkEntry chunk : chunks) {
-            if (store.contains(chunk.sha256())) {
+            if (store.hasVerified(chunk.sha256())) {
                 reused++;
+                reusedBytes += chunk.length();
                 continue;
             }
             Attempt attempt = fetchVerified(assetUri, chunk);
@@ -77,7 +80,7 @@ public final class OriginDownloader {
         }
         log.info("origin download complete asset={} chunks={} reused={} retries={} bytes={}",
                 manifest.fileName(), downloaded, reused, retries, received);
-        return new Result(downloaded, reused, retries, received, verified);
+        return new Result(downloaded, reused, retries, received, verified, reusedBytes);
     }
 
     /** Retries bad bytes and transport errors alike; an untrusted source gets no benefit of the doubt. */
@@ -191,13 +194,15 @@ public final class OriginDownloader {
     /**
      * @param bytesReceived includes bytes from failed attempts, because a wasted
      *                      retry still costs origin bandwidth
+     * @param bytesReused   verified local bytes that satisfied a chunk with no GET
      */
     public record Result(
             int chunksDownloaded,
             int chunksAlreadyCached,
             int retries,
             long bytesReceived,
-            long bytesVerified
+            long bytesVerified,
+            long bytesReused
     ) {
     }
 
