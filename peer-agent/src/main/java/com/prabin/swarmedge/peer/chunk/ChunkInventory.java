@@ -9,6 +9,7 @@ import com.prabin.swarmedge.protocol.msg.ChunkBitfield;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
@@ -27,7 +28,8 @@ import java.util.Objects;
  * {@link #rescan()} do that I/O; nothing else here touches the disk. A restart
  * rebuilds the bitfield from {@link ChunkStore#isCached}: the index says which
  * hashes are verified, the files confirm they are still there, and nothing is
- * re-hashed (P7-03).
+ * re-hashed (P7-03). {@link #rescan()} rebuilds the bitfield from scratch, so a
+ * chunk that left the store (eviction, delete) is no longer advertised.
  *
  * <p>Build this off the event loop: the constructor and {@link #rescan()} are the only
  * methods that touch the disk. Everything else is in-memory and synchronized, because a
@@ -70,9 +72,12 @@ public final class ChunkInventory {
     /** Re-read the store. Blocking I/O, so never call this from an event loop. */
     public void rescan() {
         try {
-            for (int i = 0; i < chunks.size(); i++) {
-                if (store.isCached(chunks.get(i).sha256())) {
-                    markStored(i);
+            synchronized (this) {
+                Arrays.fill(present, (byte) 0);
+                for (int i = 0; i < chunks.size(); i++) {
+                    if (store.isCached(chunks.get(i).sha256())) {
+                        ChunkBitfield.set(present, i);
+                    }
                 }
             }
         } catch (IOException e) {
