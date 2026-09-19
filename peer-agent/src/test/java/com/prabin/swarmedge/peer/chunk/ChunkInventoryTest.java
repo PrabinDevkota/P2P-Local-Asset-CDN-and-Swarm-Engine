@@ -127,6 +127,23 @@ class ChunkInventoryTest {
     }
 
     @Test
+    void aRescanClearsBitsForChunksThatLeftTheStore() throws Exception {
+        cache(0);
+        cache(2);
+        ChunkInventory inventory = new ChunkInventory(manifest, store);
+        assertThat(inventory.has(0)).isTrue();
+        assertThat(inventory.has(2)).isTrue();
+
+        Files.delete(store.pathFor(manifest.chunks().get(0).sha256()));
+        inventory.rescan();
+
+        assertThat(inventory.has(0)).isFalse();
+        assertThat(inventory.has(2)).isTrue();
+        assertThat(inventory.missing()).contains(0);
+        assertThat(inventory.missing()).doesNotContain(2);
+    }
+
+    @Test
     void whatWeHoldIsReadOnceSoNoRequestHasToTouchTheDisk() throws Exception {
         ChunkInventory inventory = new ChunkInventory(manifest, store);
         cache(1);
