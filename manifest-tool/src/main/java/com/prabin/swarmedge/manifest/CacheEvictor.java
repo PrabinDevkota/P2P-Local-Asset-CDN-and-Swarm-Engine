@@ -3,6 +3,8 @@ package com.prabin.swarmedge.manifest;
 import java.io.IOException;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * LRU / quota / min-free-space eviction over a {@link ChunkStore} (blueprint P7-02, §9.1).
@@ -10,8 +12,11 @@ import java.util.Objects;
  * <p>Candidates come from the index: verified, {@code refCount = 0}, least recently
  * used first. Referenced chunks are not in that list, and {@link ChunkStore#remove}
  * refuses them anyway, so a pinned or retained release cannot be deleted by a quota
- * miss. A chunk that was just committed is protected for the same pass — otherwise a
- * single object larger than the quota would be stored and immediately thrown away.
+ * miss. Every hash committed while this evictor is attached is protected, so a quota
+ * smaller than the working set cannot delete earlier slices of a download that is
+ * still running. A chunk that was just committed is also skipped for that pass —
+ * otherwise a single object larger than the quota would be stored and immediately
+ * thrown away.
  *
  * <p>If everything left is pinned and the cache is still over quota, eviction stops
  * rather than deleting those rows. The cache is then over budget on purpose: the
@@ -26,6 +31,8 @@ public final class CacheEvictor {
     private final ChunkIndex index;
     private final Settings settings;
     private final UsableSpace usableSpace;
+    /** Chunks committed while this evictor is attached. A quota miss must not eat the in-progress download. */
+    private final Set<String> session = ConcurrentHashMap.newKeySet();
 
     public CacheEvictor(ChunkStore store, ChunkIndex index, Settings settings, UsableSpace usableSpace) {
         this.store = Objects.requireNonNull(store, "store");
@@ -36,11 +43,17 @@ public final class CacheEvictor {
 
     /**
      * Delete unreferenced chunks until the cache fits, or until none are left to
-     * delete. {@code protectHash} is the chunk committed in this pass; it is skipped.
+     * delete. {@code protectHash} is the chunk committed in this pass; it is skipped
+     * along with every other hash committed through this evictor in the same session,
+     * so a quota smaller than the asset cannot delete earlier slices of the download
+     * that is still running.
      */
     public Result evictIfNeeded(String protectHash) throws IOException {
         if (settings.isUnlimited()) {
             return Result.NONE;
+        }
+        if (protectHash != null && !protectHash.isBlank()) {
+            session.add(protectHash);
         }
         int removed = 0;
         long bytesRemoved = 0L;
@@ -68,14 +81,22 @@ public final class CacheEvictor {
     }
 
     private ChunkIndex.Entry nextVictim(String protectHash) throws IOException {
-        String protect = protectHash == null ? "" : protectHash;
-        List<ChunkIndex.Entry> batch = index.evictionCandidates(16);
+        int limit = Math.max(32, session.size() + 1);
+        List<ChunkIndex.Entry> batch = index.evictionCandidates(limit);
         for (ChunkIndex.Entry entry : batch) {
-            if (!entry.chunkHash().equals(protect)) {
-                return entry;
+            if (protectedHash(entry.chunkHash(), protectHash)) {
+                continue;
             }
+            return entry;
         }
         return null;
+    }
+
+    private boolean protectedHash(String hash, String protectHash) {
+        if (hash.equals(protectHash) || session.contains(hash)) {
+            return true;
+        }
+        return false;
     }
 
     /**
