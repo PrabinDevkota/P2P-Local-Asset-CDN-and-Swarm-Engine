@@ -65,6 +65,53 @@ class CacheEvictorTest {
     }
 
     @Test
+    void aDownloadDoesNotEvictItsOwnEarlierChunks() throws Exception {
+        byte[] first = {1, 1, 1, 1};
+        byte[] second = {2, 2, 2, 2};
+        byte[] third = {3, 3, 3, 3};
+        try (ChunkIndex index = ChunkIndex.open(tempDir.resolve("cache.db"), stepping())) {
+            ChunkStore store = new ChunkStore(tempDir, index);
+            CacheEvictor evictor = new CacheEvictor(store, index,
+                    new CacheEvictor.Settings(6, 0), () -> Long.MAX_VALUE);
+            store.attachEvictor(evictor);
+
+            String a = put(store, first);
+            String b = put(store, second);
+            String c = put(store, third);
+
+            assertThat(store.contains(a)).isTrue();
+            assertThat(store.contains(b)).isTrue();
+            assertThat(store.contains(c)).isTrue();
+            assertThat(index.verifiedBytes()).isEqualTo(12);
+        }
+    }
+
+    @Test
+    void aLaterSessionMayEvictChunksFromAnEarlierDownload() throws Exception {
+        byte[] first = {1, 1, 1, 1};
+        byte[] second = {2, 2, 2, 2};
+        byte[] third = {3, 3, 3, 3};
+        byte[] fourth = {4, 4, 4, 4};
+        try (ChunkIndex index = ChunkIndex.open(tempDir.resolve("cache.db"), stepping())) {
+            ChunkStore store = new ChunkStore(tempDir, index);
+            String oldest = put(store, first);
+            String middle = put(store, second);
+            String previous = put(store, third);
+            CacheEvictor evictor = new CacheEvictor(store, index,
+                    new CacheEvictor.Settings(8, 0), () -> Long.MAX_VALUE);
+            store.attachEvictor(evictor);
+
+            String newest = put(store, fourth);
+
+            assertThat(store.contains(oldest)).isFalse();
+            assertThat(store.contains(middle)).isFalse();
+            assertThat(store.contains(previous)).isTrue();
+            assertThat(store.contains(newest)).isTrue();
+            assertThat(index.verifiedBytes()).isEqualTo(8);
+        }
+    }
+
+    @Test
     void aJustCommittedChunkIsNotDeletedToMakeRoomForItself() throws Exception {
         byte[] data = {1, 2, 3, 4, 5, 6, 7, 8};
         try (ChunkIndex index = ChunkIndex.open(tempDir.resolve("cache.db"))) {
