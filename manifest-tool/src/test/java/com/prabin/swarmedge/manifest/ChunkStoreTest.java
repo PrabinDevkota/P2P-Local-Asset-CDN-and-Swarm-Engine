@@ -119,6 +119,22 @@ class ChunkStoreTest {
     }
 
     @Test
+    void aTruncatedFileIsNotACacheHit() throws Exception {
+        byte[] data = {1, 2, 3, 4};
+        String hash = sha256Hex(data);
+        try (ChunkIndex index = ChunkIndex.open(tempDir.resolve("cache.db"))) {
+            ChunkStore store = new ChunkStore(tempDir, index);
+            Path saved = store.putVerified(hash, data);
+            Files.write(saved, new byte[] {1, 2});
+
+            assertThat(store.contains(hash)).isTrue();
+            assertThat(store.isCached(hash)).isFalse();
+            assertThat(store.hasVerified(hash)).isFalse();
+            assertThat(index.find(hash).orElseThrow().verified()).isTrue();
+        }
+    }
+
+    @Test
     void aCacheHitTouchesLastAccessAndDoesNotReadTheFile() throws Exception {
         byte[] data = {1, 2, 3, 4};
         String hash = sha256Hex(data);
