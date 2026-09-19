@@ -64,8 +64,9 @@ public final class ChunkStore {
     }
 
     /**
-     * True when the file is on disk and not flagged unverified. Does not hash and does
-     * not bump LRU: this is what a warm-start bitfield reads.
+     * True when the file is on disk, not flagged unverified, and still the length the
+     * index recorded. Does not hash and does not bump LRU: this is what a warm-start
+     * bitfield reads. A truncated file is a miss so the next download refetches it.
      */
     public boolean isCached(String sha256Hex) throws IOException {
         String hash = normalizeHash(sha256Hex);
@@ -76,7 +77,13 @@ public final class ChunkStore {
             return true;
         }
         Optional<ChunkIndex.Entry> entry = index.find(hash);
-        return entry.isEmpty() || entry.get().verified();
+        if (entry.isEmpty()) {
+            return true;
+        }
+        if (!entry.get().verified()) {
+            return false;
+        }
+        return entry.get().length() == Files.size(pathForNormalized(hash));
     }
 
     /**
