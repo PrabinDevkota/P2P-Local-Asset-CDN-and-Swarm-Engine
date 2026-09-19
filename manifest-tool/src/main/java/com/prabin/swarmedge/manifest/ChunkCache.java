@@ -36,16 +36,25 @@ public final class ChunkCache implements AutoCloseable {
         Objects.requireNonNull(root, "root");
         Objects.requireNonNull(settings, "settings");
         ChunkIndex index = ChunkIndex.open(root.resolve(INDEX_FILE));
-        ChunkStore store = new ChunkStore(root, index);
-        store.reconcileIndex();
-        CacheEvictor.UsableSpace disk = settings.isUnlimited()
-                ? () -> Long.MAX_VALUE
-                : () -> Files.getFileStore(store.chunksDirectory()).getUsableSpace();
-        CacheEvictor evictor = new CacheEvictor(store, index, settings, disk);
-        if (!settings.isUnlimited()) {
-            store.attachEvictor(evictor);
+        try {
+            ChunkStore store = new ChunkStore(root, index);
+            store.reconcileIndex();
+            CacheEvictor.UsableSpace disk = settings.isUnlimited()
+                    ? () -> Long.MAX_VALUE
+                    : () -> Files.getFileStore(store.chunksDirectory()).getUsableSpace();
+            CacheEvictor evictor = new CacheEvictor(store, index, settings, disk);
+            if (!settings.isUnlimited()) {
+                store.attachEvictor(evictor);
+            }
+            return new ChunkCache(store, index, evictor);
+        } catch (IOException | RuntimeException e) {
+            try {
+                index.close();
+            } catch (IOException suppressed) {
+                e.addSuppressed(suppressed);
+            }
+            throw e;
         }
-        return new ChunkCache(store, index, evictor);
     }
 
     public ChunkStore store() {
