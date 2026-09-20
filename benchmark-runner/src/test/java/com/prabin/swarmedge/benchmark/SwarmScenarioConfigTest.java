@@ -39,6 +39,8 @@ class SwarmScenarioConfigTest {
         assertThat(config.endgameThresholdBlocks()).isZero();
         assertThat(config.leecherLocality().siteId()).isEqualTo("hq");
         assertThat(config.seederLocalities()).hasSize(8);
+        assertThat(config.fallback()).isNull();
+        assertThat(config.edgeCount()).isZero();
     }
 
     @Test
@@ -72,6 +74,8 @@ class SwarmScenarioConfigTest {
             assertThat(other.everyPeerHoldsEverything()).isEqualTo(b1.everyPeerHoldsEverything());
             assertThat(other.leecherLocality()).isEqualTo(b1.leecherLocality());
             assertThat(other.seederLocalities()).isEqualTo(b1.seederLocalities());
+            assertThat(other.fallback()).isNull();
+            assertThat(other.edgeCount()).isZero();
         }
 
         // ...and the scheduler section is where they are allowed to disagree.
@@ -151,6 +155,85 @@ class SwarmScenarioConfigTest {
                         + "    rtt: " + rtt + "\n"
                         + "    capacity: " + capacity + "\n"
                         + "    health: " + health + "\n");
+    }
+
+    @Test
+    void aHybridConfigReadsFallbackTimersAndAnEdgeBudget() {
+        SwarmScenarioConfig config = SwarmScenarioConfig.parse(new StringReader("""
+                scenarioId: b6-test
+                baseline: B6
+                asset:
+                  productId: game-x
+                  version: 1.4.0
+                  fileName: game-x.bin
+                  sizeBytes: 320
+                  chunkSizeBytes: 64
+                run:
+                  repetitions: 1
+                  seed: 1
+                  coldCache: true
+                swarm:
+                  maxPeers: 5
+                  seederCount: 4
+                  blockSizeBytes: 16
+                  outstandingRequestsPerPeer: 8
+                  blockTimeoutMillis: 5000
+                  handshakeTimeoutMillis: 5000
+                  connectTimeoutMillis: 2000
+                  stallTimeoutMillis: 20000
+                  maxAttemptsPerBlock: 3
+                scheduler:
+                  sourcePolicy: LAPS
+                  lapsWeights:
+                    locality: 0.35
+                    throughput: 0.30
+                    rtt: 0.15
+                    capacity: 0.10
+                    health: 0.10
+                  endgameThresholdBlocks: 16
+                topology:
+                  leecher:
+                    siteId: hq
+                    networkGroupId: floor-2
+                  edge:
+                    siteId: hq
+                    networkGroupId: floor-2
+                  seeders:
+                    - { siteId: hq, networkGroupId: floor-2 }
+                    - { siteId: hq, networkGroupId: floor-9 }
+                    - { siteId: branch, networkGroupId: wifi }
+                    - { siteId: branch, networkGroupId: dc }
+                churn:
+                  killFractions: [0.0]
+                  everyPeerHoldsEverything: true
+                fallback:
+                  edgeAfterMillis: 500
+                  originAfterMillis: 2000
+                  jitterMillis: 400
+                  maxOriginInFlight: 2
+                  pipelineFillTarget: 0.5
+                edge:
+                  count: 1
+                  uploadBytesPerSecond: 125000000
+                """));
+
+        assertThat(config.fallback().edgeAfter()).isEqualTo(Duration.ofMillis(500));
+        assertThat(config.fallback().originAfter()).isEqualTo(Duration.ofMillis(2000));
+        assertThat(config.fallback().maxOriginInFlight()).isEqualTo(2);
+        assertThat(config.edgeCount()).isEqualTo(1);
+        assertThat(config.edgeUploadBytesPerSecond()).isEqualTo(125_000_000L);
+        assertThat(config.edgeLocality().siteId()).isEqualTo("hq");
+    }
+
+    @Test
+    void anEdgeCountNeedsALocalityAndAPositiveBudget() {
+        assertThatThrownBy(() -> SwarmScenarioConfig.parse(new StringReader(minimal() + """
+                edge:
+                  count: 1
+                  uploadBytesPerSecond: 125000000
+                """)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("topology.edge");
     }
 
     @Test
