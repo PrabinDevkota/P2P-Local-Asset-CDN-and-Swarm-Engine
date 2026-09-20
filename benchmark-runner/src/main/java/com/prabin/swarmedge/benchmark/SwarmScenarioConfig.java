@@ -1,6 +1,7 @@
 package com.prabin.swarmedge.benchmark;
 
 import com.prabin.swarmedge.peer.laps.LapsWeights;
+import com.prabin.swarmedge.peer.fallback.FallbackPolicy;
 import com.prabin.swarmedge.common.locality.Locality;
 import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
@@ -59,7 +60,11 @@ public record SwarmScenarioConfig(
         List<Double> killFractions,
         boolean everyPeerHoldsEverything,
         Locality leecherLocality,
-        List<Locality> seederLocalities
+        List<Locality> seederLocalities,
+        FallbackPolicy fallback,
+        int edgeCount,
+        long edgeUploadBytesPerSecond,
+        Locality edgeLocality
 ) {
 
     /**
@@ -150,6 +155,18 @@ public record SwarmScenarioConfig(
                         "churn.killFractions must be at least 0 and below 1, got " + fraction);
             }
         }
+        if (edgeCount < 0) {
+            throw new IllegalArgumentException("edge.count cannot be negative");
+        }
+        if (edgeCount > 0 && edgeLocality == null) {
+            throw new IllegalArgumentException("topology.edge is required when edge.count is positive");
+        }
+        if (edgeCount > 0 && edgeUploadBytesPerSecond <= 0) {
+            throw new IllegalArgumentException("edge.uploadBytesPerSecond must be positive");
+        }
+        if (edgeCount == 0 && edgeUploadBytesPerSecond < 0) {
+            throw new IllegalArgumentException("edge.uploadBytesPerSecond cannot be negative");
+        }
     }
 
     /** How many seeders a given kill share takes out, never all of them. */
@@ -204,7 +221,75 @@ public record SwarmScenarioConfig(
                 fractions(churn, "killFractions"),
                 bool(churn, "everyPeerHoldsEverything"),
                 topologyLeecher(root),
-                topologySeeders(root));
+                topologySeeders(root),
+                fallback(root),
+                edgeCount(root),
+                edgeUploadBytesPerSecond(root),
+                topologyEdge(root));
+    }
+
+    /**
+     * Absent means today's B1–B3 path: no EDGE timer, no origin rung. Present is B6.
+     * Defaults are not filled in here so a published run records the numbers it used.
+     */
+    private static FallbackPolicy fallback(Map<String, Object> root) {
+        Map<String, Object> section = optionalSection(root, "fallback");
+        if (section == null) {
+            return null;
+        }
+        return new FallbackPolicy(
+                millisAllowZero(section, "edgeAfterMillis"),
+                millisAllowZero(section, "originAfterMillis"),
+                millisAllowZero(section, "jitterMillis"),
+                (int) number(section, "maxOriginInFlight"),
+                decimal(section, "pipelineFillTarget"));
+    }
+
+    private static int edgeCount(Map<String, Object> root) {
+        Map<String, Object> edge = optionalSection(root, "edge");
+        if (edge == null) {
+            return 0;
+        }
+        return (int) number(edge, "count");
+    }
+
+    private static long edgeUploadBytesPerSecond(Map<String, Object> root) {
+        Map<String, Object> edge = optionalSection(root, "edge");
+        if (edge == null) {
+            return 0L;
+        }
+        if (!edge.containsKey("uploadBytesPerSecond")) {
+            return 0L;
+        }
+        return number(edge, "uploadBytesPerSecond");
+    }
+
+    private static Locality topologyEdge(Map<String, Object> root) {
+        Map<String, Object> topology = optionalSection(root, "topology");
+        if (topology == null) {
+            return null;
+        }
+        Map<String, Object> edge = optionalSection(topology, "edge");
+        if (edge == null) {
+            return null;
+        }
+        return locality(edge, "topology.edge");
+    }
+
+    private static Duration millisAllowZero(Map<String, Object> map, String key) {
+        long value = number(map, key);
+        if (value < 0) {
+            throw new IllegalArgumentException("key " + key + " cannot be negative");
+        }
+        return Duration.ofMillis(value);
+    }
+
+    private static double decimal(Map<String, Object> map, String key) {
+        Object value = map.get(key);
+        if (!(value instanceof Number n)) {
+            throw new IllegalArgumentException("key " + key + " must be a number");
+        }
+        return n.doubleValue();
     }
 
     private static SourcePolicy policy(Map<String, Object> scheduler) {
