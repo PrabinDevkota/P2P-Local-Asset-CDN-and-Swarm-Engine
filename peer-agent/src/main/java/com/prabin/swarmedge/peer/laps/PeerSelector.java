@@ -1,7 +1,9 @@
 package com.prabin.swarmedge.peer.laps;
 
+import com.prabin.swarmedge.common.PeerRole;
 import com.prabin.swarmedge.common.id.PeerId;
 import com.prabin.swarmedge.common.locality.Locality;
+import com.prabin.swarmedge.common.locality.LocalityClass;
 
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
@@ -25,6 +27,8 @@ import java.util.OptionalDouble;
  *   <li><b>B1</b> — no selector at all; dial in whatever order discovery returned.</li>
  *   <li><b>B2</b> — {@link LapsWeights#localityOnly()}: nearest first and nothing else.</li>
  *   <li><b>B3</b> — {@link LapsWeights#defaults()}: the full LAPS score.</li>
+ *   <li><b>B6</b> — the same LAPS list, except a healthy same-site {@link PeerRole#EDGE}
+ *       is pulled to the front. An overloaded or sick EDGE is not pinned.</li>
  * </ul>
  *
  * <p>Metrics are kept here and survive between rounds of selection, which is what makes
@@ -38,10 +42,17 @@ import java.util.OptionalDouble;
  */
 public final class PeerSelector {
 
+    /** Advertised load at or above this is a saturated EDGE, not a preferred one. */
+    static final double EDGE_LOAD_SATURATED = 0.85;
+    /** Observed health below this is a sick EDGE; empty health is unproven, not sick. */
+    static final double EDGE_HEALTH_FLOOR = 0.4;
+
     private final LapsScorer scorer;
+    private final Locality self;
     private final Map<PeerId, PeerMetrics> history = new HashMap<>();
 
     public PeerSelector(LapsWeights weights, Locality self, long tieBreakSeed) {
+        this.self = Objects.requireNonNull(self, "self");
         this.scorer = new LapsScorer(weights, self, tieBreakSeed);
     }
 
@@ -68,11 +79,50 @@ public final class PeerSelector {
             scored.add(new LapsCandidate(candidate.peerId(), candidate.locality(),
                     metricsFor(candidate.peerId()), candidate.advertisedUploadLoad()));
         }
-        List<Candidate> ranked = new ArrayList<>(candidates.size());
+        List<Candidate> lapsOrder = new ArrayList<>(candidates.size());
         for (LapsScorer.Scored entry : scorer.rank(scored)) {
-            ranked.add(byPeer.get(entry.candidate().peerId()));
+            lapsOrder.add(byPeer.get(entry.candidate().peerId()));
         }
-        return List.copyOf(ranked);
+        return List.copyOf(preferHealthyEdge(lapsOrder));
+    }
+
+    /**
+     * B6 two-tier sort: healthy same-site EDGE first, in their LAPS order, then
+     * everyone else in LAPS order. Candidates without a role are unchanged, so B2
+     * and B3 keep the list they already had.
+     */
+    private List<Candidate> preferHealthyEdge(List<Candidate> lapsOrder) {
+        List<Candidate> edge = new ArrayList<>();
+        List<Candidate> rest = new ArrayList<>();
+        for (Candidate candidate : lapsOrder) {
+            if (healthySameSiteEdge(candidate)) {
+                edge.add(candidate);
+            } else {
+                rest.add(candidate);
+            }
+        }
+        if (edge.isEmpty()) {
+            return lapsOrder;
+        }
+        List<Candidate> ranked = new ArrayList<>(lapsOrder.size());
+        ranked.addAll(edge);
+        ranked.addAll(rest);
+        return ranked;
+    }
+
+    private boolean healthySameSiteEdge(Candidate candidate) {
+        if (candidate.role() != PeerRole.EDGE) {
+            return false;
+        }
+        if (self.classify(candidate.locality()) == LocalityClass.REMOTE_SITE) {
+            return false;
+        }
+        if (candidate.advertisedUploadLoad().isPresent()
+                && candidate.advertisedUploadLoad().getAsDouble() >= EDGE_LOAD_SATURATED) {
+            return false;
+        }
+        var health = metricsFor(candidate.peerId()).healthScore();
+        return health.isEmpty() || health.getAsDouble() >= EDGE_HEALTH_FLOOR;
     }
 
     /** Just the addresses, which is what a swarm downloader takes. */
@@ -102,7 +152,8 @@ public final class PeerSelector {
             InetSocketAddress address,
             PeerId peerId,
             Locality locality,
-            OptionalDouble advertisedUploadLoad) {
+            OptionalDouble advertisedUploadLoad,
+            PeerRole role) {
 
         public Candidate {
             Objects.requireNonNull(address, "address");
@@ -112,7 +163,15 @@ public final class PeerSelector {
         }
 
         public static Candidate of(InetSocketAddress address, PeerId peerId, Locality locality) {
-            return new Candidate(address, peerId, locality, OptionalDouble.empty());
+            return new Candidate(address, peerId, locality, OptionalDouble.empty(), null);
+        }
+
+        public static Candidate edge(InetSocketAddress address, PeerId peerId, Locality locality) {
+            return new Candidate(address, peerId, locality, OptionalDouble.empty(), PeerRole.EDGE);
+        }
+
+        public Candidate withAdvertisedUploadLoad(double load) {
+            return new Candidate(address, peerId, locality, OptionalDouble.of(load), role);
         }
     }
 }
