@@ -1,0 +1,75 @@
+# Baseline B6: same asset and seed as B3, plus the progressive fallback ladder.
+# Cache and local peers first, then a same-site EDGE, then limited origin.
+# Nothing here is a target or a claim; numbers come out of a run.
+scenarioId: b6-hybrid-fallback
+baseline: B6
+description: One leecher rebuilds one immutable asset with EDGE and origin fallback.
+
+asset:
+  productId: game-x
+  version: 1.4.0
+  fileName: game-x-1.4.0.bin
+  # Identical to B3 so a difference is the ladder, not the payload.
+  sizeBytes: 67108864
+  chunkSizeBytes: 4194304
+
+run:
+  repetitions: 3
+  seed: 20260914
+  coldCache: true
+
+swarm:
+  # One extra slot so the EDGE can join after the timer without waiting for a death.
+  maxPeers: 9
+  seederCount: 8
+  blockSizeBytes: 262144
+  outstandingRequestsPerPeer: 8
+  blockTimeoutMillis: 30000
+  handshakeTimeoutMillis: 10000
+  connectTimeoutMillis: 5000
+  stallTimeoutMillis: 120000
+  maxAttemptsPerBlock: 3
+
+topology:
+  leecher:
+    siteId: hq
+    networkGroupId: floor-2
+  edge:
+    siteId: hq
+    networkGroupId: floor-2
+  seeders:
+    - { siteId: hq, networkGroupId: floor-2 }
+    - { siteId: hq, networkGroupId: floor-2 }
+    - { siteId: hq, networkGroupId: floor-9 }
+    - { siteId: hq, networkGroupId: floor-9 }
+    - { siteId: branch, networkGroupId: wifi }
+    - { siteId: branch, networkGroupId: wifi }
+    - { siteId: branch, networkGroupId: dc }
+    - { siteId: branch, networkGroupId: dc }
+
+scheduler:
+  sourcePolicy: LAPS
+  lapsWeights:
+    locality: 0.35
+    throughput: 0.30
+    rtt: 0.15
+    capacity: 0.10
+    health: 0.10
+  endgameThresholdBlocks: 16
+
+fallback:
+  # Blueprint §12.1 mid-range defaults. Experiment inputs, not constants.
+  edgeAfterMillis: 500
+  originAfterMillis: 2000
+  jitterMillis: 400
+  maxOriginInFlight: 2
+  pipelineFillTarget: 0.5
+
+edge:
+  count: 1
+  # 1 Gbit/s in bytes. A rate, not a measured result.
+  uploadBytesPerSecond: 125000000
+
+churn:
+  killFractions: [0.0, 0.10, 0.25]
+  everyPeerHoldsEverything: true
