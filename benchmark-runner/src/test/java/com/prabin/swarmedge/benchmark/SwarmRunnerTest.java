@@ -9,6 +9,7 @@ import com.prabin.swarmedge.manifest.ManifestSigner;
 import com.prabin.swarmedge.manifest.ManifestVerifier;
 import com.prabin.swarmedge.manifest.ReleaseManifest;
 import com.prabin.swarmedge.manifest.ReleaseManifestFactory;
+import com.prabin.swarmedge.origin.OriginHttpServer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -83,7 +84,49 @@ class SwarmRunnerTest {
             assertThat(run.peerBytes()).isPositive();
             assertThat(run.peersDialled()).isPositive();
             assertThat(run.peersLost()).isZero();
+            assertThat(run.originBytes()).isZero();
+            assertThat(run.originPeakBytes()).isZero();
+            assertThat(run.edgeBytes()).isZero();
+            assertThat(run.cacheBytes()).isZero();
         });
+    }
+
+    @Test
+    void aHybridRunRebuildsTheAssetAndRecordsOriginFields() throws Exception {
+        Path originRoot = Files.createDirectories(tempDir.resolve("origin"));
+        Files.write(originRoot.resolve(ASSET_NAME), original);
+        try (OriginHttpServer origin = new OriginHttpServer(originRoot)) {
+            SwarmRunner.Summary summary = new SwarmRunner(hybridConfig(), tempDir.resolve("hybrid"),
+                    published, assetId, origin.baseUri(), origin.ledger()).run(manifest);
+
+            assertThat(summary.assetHashesMatch()).isTrue();
+            assertThat(summary.assetSha256()).isEqualTo(sha256Hex(original));
+            assertThat(summary.runs()).allSatisfy(run -> {
+                assertThat(run.originBytes()).isGreaterThanOrEqualTo(0);
+                assertThat(run.originPeakBytes()).isLessThanOrEqualTo(run.originBytes());
+                assertThat(run.cacheBytes()).isZero();
+            });
+        }
+    }
+
+    @Test
+    void committedB6ConfigsShareB3AssetAndSeedAndClaimNoResults() throws Exception {
+        Path configs = Path.of("..", "research", "configs");
+        SwarmScenarioConfig b3 = SwarmScenarioConfig.load(configs.resolve("b3-laps.yaml"));
+        SwarmScenarioConfig hybrid = SwarmScenarioConfig.load(configs.resolve("b6-hybrid-fallback.yaml"));
+        SwarmScenarioConfig peerOnly = SwarmScenarioConfig.load(configs.resolve("b6-flash-crowd-peer-only.yaml"));
+        SwarmScenarioConfig edge = SwarmScenarioConfig.load(configs.resolve("b6-flash-crowd-edge.yaml"));
+
+        for (SwarmScenarioConfig b6 : List.of(hybrid, peerOnly, edge)) {
+            assertThat(b6.seed()).isEqualTo(b3.seed());
+            assertThat(b6.sizeBytes()).isEqualTo(b3.sizeBytes());
+            assertThat(b6.chunkSizeBytes()).isEqualTo(b3.chunkSizeBytes());
+            assertThat(b6.fileName()).isEqualTo(b3.fileName());
+            assertThat(b6.fallback()).isNotNull();
+        }
+        assertThat(hybrid.edgeCount()).isEqualTo(1);
+        assertThat(peerOnly.edgeCount()).isZero();
+        assertThat(edge.edgeCount()).isEqualTo(1);
     }
 
     @Test
@@ -126,6 +169,60 @@ class SwarmRunnerTest {
 
     private static SwarmScenarioConfig config(int repetitions, List<Double> killFractions) {
         return config(repetitions, killFractions, true);
+    }
+
+    private static SwarmScenarioConfig hybridConfig() {
+        return SwarmScenarioConfig.parse(new StringReader("""
+                scenarioId: b6-test
+                baseline: B6
+                asset:
+                  productId: game-x
+                  version: 1.4.0
+                  fileName: %s
+                  sizeBytes: %d
+                  chunkSizeBytes: %d
+                run:
+                  repetitions: 1
+                  seed: 20260914
+                  coldCache: true
+                swarm:
+                  maxPeers: 5
+                  seederCount: 4
+                  blockSizeBytes: %d
+                  outstandingRequestsPerPeer: 8
+                  blockTimeoutMillis: 5000
+                  handshakeTimeoutMillis: 5000
+                  connectTimeoutMillis: 2000
+                  stallTimeoutMillis: 20000
+                  maxAttemptsPerBlock: 3
+                scheduler:
+                  sourcePolicy: LAPS
+                  lapsWeights:
+                    locality: 0.35
+                    throughput: 0.30
+                    rtt: 0.15
+                    capacity: 0.10
+                    health: 0.10
+                  endgameThresholdBlocks: 0
+                topology:
+                  leecher:
+                    siteId: hq
+                    networkGroupId: floor-2
+                  seeders:
+                    - { siteId: hq, networkGroupId: floor-2 }
+                    - { siteId: hq, networkGroupId: floor-2 }
+                    - { siteId: hq, networkGroupId: floor-9 }
+                    - { siteId: branch, networkGroupId: wifi }
+                churn:
+                  killFractions: [0.0]
+                  everyPeerHoldsEverything: true
+                fallback:
+                  edgeAfterMillis: 0
+                  originAfterMillis: 0
+                  jitterMillis: 0
+                  maxOriginInFlight: 2
+                  pipelineFillTarget: 0.5
+                """.formatted(ASSET_NAME, TOTAL_CHUNKS * CHUNK_SIZE, CHUNK_SIZE, BLOCK_SIZE)));
     }
 
     private static SwarmScenarioConfig config(int repetitions, List<Double> killFractions,
