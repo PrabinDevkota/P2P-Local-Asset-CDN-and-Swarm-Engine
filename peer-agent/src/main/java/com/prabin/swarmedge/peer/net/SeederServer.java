@@ -70,7 +70,7 @@ public final class SeederServer implements AutoCloseable {
                             SeederHandler handler = new SeederHandler(
                                     config.assetId(), config.peerId(), config.inventory(), config.store(),
                                     new BlockSender(config.sendMode()), diskExecutor, config.authPolicy(),
-                                    config.maxBlockSize(), config.handshakeTimeout());
+                                    config.maxBlockSize(), config.handshakeTimeout(), config.upload());
                             lastSession = handler;
                             ch.pipeline().addLast(
                                     new StreamingFrameDecoder(ProtocolLimits.MAX_FRAME_LENGTH, config.maxBlockSize()),
@@ -131,7 +131,8 @@ public final class SeederServer implements AutoCloseable {
             int maxBlockSize,
             int lowWaterMark,
             int highWaterMark,
-            Duration handshakeTimeout) {
+            Duration handshakeTimeout,
+            SeederHandler.Settings upload) {
 
         public static final Duration DEFAULT_HANDSHAKE_TIMEOUT = Duration.ofSeconds(10);
 
@@ -143,6 +144,7 @@ public final class SeederServer implements AutoCloseable {
             Objects.requireNonNull(sendMode, "sendMode");
             Objects.requireNonNull(authPolicy, "authPolicy");
             Objects.requireNonNull(handshakeTimeout, "handshakeTimeout");
+            upload = upload == null ? SeederHandler.Settings.desktop() : upload;
             if (maxBlockSize <= 0 || maxBlockSize > ProtocolLimits.absoluteMaxBlockSize()) {
                 throw new IllegalArgumentException("maxBlockSize out of range: " + maxBlockSize);
             }
@@ -151,11 +153,19 @@ public final class SeederServer implements AutoCloseable {
             }
         }
 
+        /** Desktop upload budget, which is what every existing caller asked for. */
+        public Config(int port, AssetId assetId, PeerId peerId, ChunkInventory inventory, ChunkStore store,
+                      BlockSender.Mode sendMode, PeerAuthPolicy authPolicy, int maxBlockSize,
+                      int lowWaterMark, int highWaterMark, Duration handshakeTimeout) {
+            this(port, assetId, peerId, inventory, store, sendMode, authPolicy, maxBlockSize,
+                    lowWaterMark, highWaterMark, handshakeTimeout, SeederHandler.Settings.desktop());
+        }
+
         public static Config of(AssetId assetId, PeerId peerId, ChunkInventory inventory, ChunkStore store,
                                 BlockSender.Mode sendMode, int maxBlockSize) {
             return new Config(0, assetId, peerId, inventory, store, sendMode,
                     PeerAuthPolicy.ACCEPT_ANY_TOKEN, maxBlockSize, maxBlockSize, maxBlockSize * 4,
-                    DEFAULT_HANDSHAKE_TIMEOUT);
+                    DEFAULT_HANDSHAKE_TIMEOUT, SeederHandler.Settings.desktop());
         }
     }
 }
