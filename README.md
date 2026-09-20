@@ -8,7 +8,7 @@ This is an engineering system and a research testbed. The first paper focuses on
 
 ## Status
 
-Phases **0–7 are done** against the blueprint backlog. `./mvnw verify` is the gate and is green. **Phase 8** (EDGE role + progressive fallback) is next.
+Phases **0–8 are done** against the blueprint backlog. `./mvnw verify` is the gate and is green. **Phase 9** (security hardening) is next.
 
 | Phase | State | What it is |
 | --- | --- | --- |
@@ -20,8 +20,8 @@ Phases **0–7 are done** against the blueprint backlog. `./mvnw verify` is the 
 | 5 | Done | Baseline B1: dial up to 8 peers, rarest-first over counted availability, one shared block queue, HAVE broadcast, churn smoke |
 | 6 | Done | Shared locality classes, EWMA goodput/RTT, LAPS scoring and dial order, endgame duplicates, configs for B1/B2/B3 |
 | 7 | Done | Cache lookup before network, LRU/quota eviction, warm-start inventory, baseline B4 |
-| 8 | Next | EDGE role + progressive fallback with jitter |
-| 8+ | Later | Security hardening, experiment harness, FastCDC |
+| 8 | Done | EDGE upload budget, deterministic fallback jitter, hybrid cancel-across-sources, baseline B6 |
+| 9+ | Later | Security hardening, experiment harness, FastCDC |
 
 Trust rules that must not drift:
 
@@ -205,7 +205,7 @@ Two stages, kept separate for experiments:
 - **A — which chunk/block?** Rarest-first with a seeded tie-break, plus endgame duplication to at most two sources — **done** (`ChunkAvailability` + `SwarmScheduler`).
 - **B — which source?** Locality-only (B2) and **LAPS** (B3) — **done** (`LapsScorer` + `PeerSelector`). Live sessions record observed goodput, RTT, and health into `PeerMetrics`, and the scheduler prefers a better-scoring peer while that peer still has pipeline room.
 
-Source priority now starts with a **verified local cache** (Phase 7). Later rungs — same-site EDGE, then limited origin — are Phase 8.
+Source priority is **verified local cache → local/NG peers → same-site EDGE → limited origin**. EDGE is the same `peer-agent` binary with a larger upload budget. Fallback timers are jittered so a flash crowd does not share one origin start time. First verified chunk wins; the other source is cancelled.
 
 ## Explicit non-goals (v1)
 
