@@ -82,4 +82,10 @@ Rules worth remembering when editing this module:
 
 `ChunkCache` opens the store together with `cache.db` so a restart sees what was verified. `ChunkInventory` rebuilds its bitfield from `isCached` — the index plus file existence — without re-hashing the warehouse. `CacheEvictor` deletes LRU unreferenced chunks down to a quota and a min-free-space floor; a referenced or just-committed chunk is not deleted to make the numbers look tidy.
 
+## Hybrid fallback (Phase 8)
+
+`HybridDownloader` owns the clock. t=0 is cache plus the peers already dialled. A same-site EDGE is offered after `FallbackPolicy.delay(EDGE)` only when the peer pipeline is still below the fill target. Origin Range GETs start on the later rung, at most `maxOriginInFlight` at once. First verified copy of a chunk wins: a swarm hit cancels that GET; an origin hit drops the chunk from the peer queue.
+
+EDGE is process policy (`SeederHandler.Settings.edge`, `PeerSelector.Candidate.edge`). It is not a new protocol frame and is not announced to the tracker.
+
 Not wired yet: `SwarmNode` still has no CLI to point a seeder at a manifest, and the token in HELLO is carried but not verified (`PeerAuthPolicy` is where that lands).
