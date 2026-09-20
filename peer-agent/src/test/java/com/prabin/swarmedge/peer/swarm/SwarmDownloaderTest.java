@@ -342,6 +342,23 @@ class SwarmDownloaderTest {
     }
 
     @Test
+    void aLateSeederIsUsedWhenOffered() throws Exception {
+        InetSocketAddress early = seederHolding("early", 0, 1, 2, 3);
+        InetSocketAddress late = seederHolding("late", 4, 5, 6, 7);
+        Leecher leecher = leecher("leecher");
+        SwarmDownloader swarm = swarm(leecher, 2);
+
+        CompletableFuture<SwarmDownloader.Result> future = swarm.start(List.of(early));
+        swarm.offer(List.of(PeerSelector.Candidate.of(late, PeerId.of(filled((byte) 9, 16)),
+                new Locality("hq", "floor-2"))));
+
+        await(future);
+
+        assertThat(leecher.inventory().complete()).isTrue();
+        assertThatRebuiltAssetMatches(leecher);
+    }
+
+    @Test
     void aSwarmWithNoCandidatesFailsImmediately() throws Exception {
         Leecher leecher = leecher("leecher");
 
