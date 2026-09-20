@@ -2,7 +2,7 @@
 
 Task IDs are the blueprint's backlog IDs (§16). `./mvnw verify` is the gate for every step.
 
-Phases 0–7 are complete. **Phase 8 (EDGE role + progressive fallback) is next.**
+Phases 0–8 are complete. **Phase 9 (security hardening) is next.**
 
 ## What exists
 
@@ -11,10 +11,10 @@ Phases 0–7 are complete. **Phase 8 (EDGE role + progressive fallback) is next.
 | `common/` | `AssetId`, `PeerId`, `Hex`, `Defaults` (4 MiB chunk, 256 KiB block, 45 s TTL, limit 20) |
 | `protocol/` | Frame codecs + golden vectors for all ten message types, streaming BLOCK decoder, pinned BITFIELD bit order |
 | `manifest-tool/` | Chunk → `ChunkStore` + SQLite `ChunkIndex` → unsigned manifest → Ed25519 sign → verify → rebuild → resume; CLI `gen-key` / `sign` / `verify` |
-| `origin-fixture/` | `GET /files/{name}` 200/206/404, `GET /manifests/{name}.json` copy only, served-byte ledger per run |
-| `peer-agent/` | `OriginDownloader` (B0 path) plus a live swarm: seeders serve, `SwarmDownloader` fetches rarest-first from many peers and verifies |
+| `origin-fixture/` | `GET /files/{name}` 200/206/404, `GET /manifests/{name}.json` copy only, served-byte ledger plus a 1 s peak per run |
+| `peer-agent/` | Origin, swarm, LAPS, and `HybridDownloader`: cache → peers → same-site EDGE → limited origin |
 | `tracker-service/` | Announce with bearer peer token, Redis `HEXPIRE` 45 s, ranked candidates, `POST /api/v1/auth/peer-token` |
-| `benchmark-runner/` | `B0Runner` and `SwarmRunner` with their configs, reading `research/configs/*.yaml` |
+| `benchmark-runner/` | `B0Runner` and `SwarmRunner` with B0–B4 and B6 configs, reading `research/configs/*.yaml` |
 
 ## Phase 4 — Two-peer Netty session (`peer-agent/`) — complete
 
@@ -89,11 +89,18 @@ The store and its SQLite index already existed from P1-04. What this phase added
 
 All four are done. `ChunkStore.hasVerified` is the lookup before network; `CacheEvictor` deletes LRU unreferenced chunks down to quota and min-free-space without touching pinned rows; a restart rebuilds the bitfield from the index plus file existence; `b4-warm-cache.yaml` is B0 with a warm store so origin and cache bytes can be compared.
 
-## Phase 8 — EDGE role + progressive fallback (`peer-agent/`)
+## Phase 8 — EDGE role + progressive fallback (`peer-agent/`) — complete
 
-Next. Local verified cache is now the first source. What is still missing is site EDGE and origin as later rungs, with jittered fallback timers so a flash crowd does not slam origin together.
+| Step | Job | Outcome |
+| --- | --- | --- |
+| P8-01 | EDGE role + upload budget | Desktop 32/2/unlimited; EDGE 128/8/rate; healthy same-site EDGE ranks first |
+| P8-02 | Timers + jitter | `FallbackPolicy.delay` is deterministic; 100 seeds do not share one origin timestamp |
+| P8-03 | Cross-source cancel | Swarm hit cancels that origin GET; origin hit drops the chunk from the peer queue |
+| P8-04 | B6 scenarios | Same asset/seed as B3; runner records origin, peak, EDGE, peer, and cache bytes |
 
-## Carried forward (not blocking Phase 8)
+EDGE is the same binary. Role is not on the tracker wire. Origin stays chunk-granular. B1–B3 configs were not edited.
+
+## Carried forward (not blocking Phase 9)
 
 These are blueprint items whose phase is closed but which later phases assume.
 
@@ -106,8 +113,7 @@ These are blueprint items whose phase is closed but which later phases assume.
 
 ## Later (do not pull forward)
 
-- Phase 8 EDGE role + progressive fallback with jitter — **next**, do not skip it
-- Phase 9 security hardening (sequence/rollback, reputation, log audit)
+- Phase 9 security hardening (sequence/rollback, reputation, log audit) — **next**
 - Phase 10 experiment harness; Phase 11 FastCDC; Phase 12 release
 - No invented Mbps or offload %
 
