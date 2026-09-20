@@ -13,6 +13,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -76,7 +77,7 @@ public final class OriginChunkFetcher {
         }
         send.whenComplete((response, error) -> {
             inFlight.remove(chunk.index(), flight);
-            if (send.isCancelled()) {
+            if (cancelled(send, error) || outcome.isDone()) {
                 outcome.complete(false);
                 return;
             }
@@ -96,10 +97,14 @@ public final class OriginChunkFetcher {
 
     public void cancel(int chunkIndex) {
         Flight flight = inFlight.remove(chunkIndex);
-        if (flight != null && flight.send.cancel(true)) {
-            cancelled.incrementAndGet();
-            flight.outcome.complete(false);
+        if (flight == null) {
+            return;
         }
+        // Complete first so a CancellationException from send.cancel cannot look
+        // like a hard failure. Bytes that arrive after this are discarded.
+        cancelled.incrementAndGet();
+        flight.outcome.complete(false);
+        flight.send.cancel(true);
     }
 
     public void cancelAll() {
@@ -117,6 +122,19 @@ public final class OriginChunkFetcher {
 
     public int cancelled() {
         return cancelled.get();
+    }
+
+    private static boolean cancelled(CompletableFuture<?> send, Throwable error) {
+        if (send.isCancelled()) {
+            return true;
+        }
+        while (error != null) {
+            if (error instanceof CancellationException) {
+                return true;
+            }
+            error = error.getCause();
+        }
+        return false;
     }
 
     private void commit(ChunkEntry chunk, HttpResponse<byte[]> response) throws IOException {
