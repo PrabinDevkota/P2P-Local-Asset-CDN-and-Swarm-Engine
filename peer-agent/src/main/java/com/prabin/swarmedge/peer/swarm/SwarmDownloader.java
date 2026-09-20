@@ -19,9 +19,11 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -73,12 +75,14 @@ public final class SwarmDownloader implements AutoCloseable {
     private final Map<InetSocketAddress, PeerSelector.Candidate> known = new HashMap<>();
     private final ConcurrentHashMap<Integer, PeerSelector.Candidate> roster = new ConcurrentHashMap<>();
     private final Deque<InetSocketAddress> spares = new ArrayDeque<>();
+    private final Set<InetSocketAddress> dialled = new HashSet<>();
     private final ScheduledExecutorService watchdog;
 
     private int nextSessionId = 1;
     private int sessionsStarted;
     private int sessionsLost;
     private boolean started;
+    private boolean holdStall;
     private long lastProgress;
     private ScheduledFuture<?> stallCheck;
 
@@ -179,6 +183,67 @@ public final class SwarmDownloader implements AutoCloseable {
     }
 
     /**
+     * Admit more peers after start (P8-02): a same-site EDGE that was not in the first
+     * dial list. Already-connected addresses are ignored. Extra peers past
+     * {@code maxPeers} wait as replacements, same as the original spare list.
+     */
+    public synchronized void offer(List<PeerSelector.Candidate> candidates) {
+        Objects.requireNonNull(candidates, "candidates");
+        if (!started || completion.isDone()) {
+            return;
+        }
+        List<PeerSelector.Candidate> order = selector == null
+                ? List.copyOf(candidates)
+                : selector.rank(candidates);
+        for (PeerSelector.Candidate candidate : order) {
+            known.put(candidate.address(), candidate);
+            if (dialled.contains(candidate.address())) {
+                continue;
+            }
+            if (sessions.size() < settings.maxPeers()) {
+                dial(candidate.address());
+            } else {
+                spares.addLast(candidate.address());
+            }
+        }
+    }
+
+    /**
+     * Pause the stall watchdog while origin work can still finish the asset (P8-02).
+     * Progress is re-based when the hold is released so a quiet origin stretch does
+     * not look like a dead swarm.
+     */
+    public synchronized void holdStall(boolean hold) {
+        this.holdStall = hold;
+        if (!hold) {
+            lastProgress = scheduler.progress();
+        }
+    }
+
+    /** Leased blocks over session capacity, or 0 when nobody is connected yet. */
+    public synchronized double pipelineFill() {
+        if (sessions.isEmpty()) {
+            return 0;
+        }
+        int capacity = sessions.size() * settings.session().maxOutstanding();
+        return (double) scheduler.leasedBlocks() / capacity;
+    }
+
+    /**
+     * A chunk verified from origin (or cache). Drop it from the peer queue and tell
+     * every session so they stop asking for it (P8-03).
+     */
+    public void acceptForeignChunk(int chunkIndex) {
+        synchronized (this) {
+            if (completion.isDone()) {
+                return;
+            }
+            scheduler.viewFor(-1, settings.session().blockSize()).dropChunk(chunkIndex);
+        }
+        chunkStored(-1, chunkIndex);
+    }
+
+    /**
      * Nothing has moved for a whole stall period. Either the peers we hold cannot supply
      * what is left, or they have all gone quiet; both are dead ends, so say which one it
      * was and fail closed rather than stay connected to a swarm that cannot finish.
@@ -186,7 +251,7 @@ public final class SwarmDownloader implements AutoCloseable {
     private void onStallCheck() {
         List<LeecherHandler> open;
         synchronized (this) {
-            if (completion.isDone()) {
+            if (completion.isDone() || holdStall) {
                 return;
             }
             long seen = scheduler.progress();
@@ -231,6 +296,7 @@ public final class SwarmDownloader implements AutoCloseable {
     }
 
     private void dial(InetSocketAddress seeder) {
+        dialled.add(seeder);
         int sessionId = nextSessionId++;
         sessionsStarted++;
         LeecherClient.Request request = new LeecherClient.Request(
