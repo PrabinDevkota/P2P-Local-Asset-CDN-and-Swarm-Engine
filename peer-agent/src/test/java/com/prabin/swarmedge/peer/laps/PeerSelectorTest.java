@@ -130,6 +130,53 @@ class PeerSelectorTest {
     }
 
     @Test
+    void aHealthySameSiteEdgeIsDialledBeforeADesktopSeeder() {
+        PeerSelector selector = new PeerSelector(LapsWeights.localityOnly(), ME, SEED);
+        PeerSelector.Candidate desktop = PeerSelector.Candidate.of(
+                new InetSocketAddress("10.0.0.1", 9091), peerId(1), ME);
+        PeerSelector.Candidate edge = PeerSelector.Candidate.edge(
+                new InetSocketAddress("10.0.0.2", 9091), peerId(2), new Locality("hq", "floor-9"));
+
+        assertThat(selector.rank(List.of(desktop, edge))).containsExactly(edge, desktop);
+    }
+
+    @Test
+    void anOverloadedEdgeIsNotPinnedFirst() {
+        PeerSelector selector = new PeerSelector(LapsWeights.localityOnly(), ME, SEED);
+        PeerSelector.Candidate desktop = PeerSelector.Candidate.of(
+                new InetSocketAddress("10.0.0.1", 9091), peerId(1), ME);
+        PeerSelector.Candidate edge = PeerSelector.Candidate.edge(
+                new InetSocketAddress("10.0.0.2", 9091), peerId(2), new Locality("hq", "floor-9"))
+                .withAdvertisedUploadLoad(0.95);
+
+        assertThat(selector.rank(List.of(desktop, edge))).containsExactly(desktop, edge);
+    }
+
+    @Test
+    void aSickEdgeFallsBackToOrdinaryLapsOrder() {
+        PeerSelector selector = new PeerSelector(LapsWeights.defaults(), ME, SEED);
+        PeerSelector.Candidate desktop = PeerSelector.Candidate.of(
+                new InetSocketAddress("10.0.0.1", 9091), peerId(1), ME);
+        PeerSelector.Candidate edge = PeerSelector.Candidate.edge(
+                new InetSocketAddress("10.0.0.2", 9091), peerId(2), ME);
+        selector.metricsFor(edge.peerId()).blockFailed();
+        selector.metricsFor(edge.peerId()).blockFailed();
+
+        assertThat(selector.rank(List.of(desktop, edge))).containsExactly(desktop, edge);
+    }
+
+    @Test
+    void aRemoteEdgeIsNotPreferredOverALocalPeer() {
+        PeerSelector selector = new PeerSelector(LapsWeights.localityOnly(), ME, SEED);
+        PeerSelector.Candidate local = PeerSelector.Candidate.of(
+                new InetSocketAddress("10.0.0.1", 9091), peerId(1), ME);
+        PeerSelector.Candidate remoteEdge = PeerSelector.Candidate.edge(
+                new InetSocketAddress("10.0.0.2", 9091), peerId(2), new Locality("branch", "wifi"));
+
+        assertThat(selector.rank(List.of(remoteEdge, local))).containsExactly(local, remoteEdge);
+    }
+
+    @Test
     void theSamePeerAtTwoAddressesIsRejected() {
         PeerSelector selector = new PeerSelector(LapsWeights.defaults(), ME, SEED);
         PeerId duplicate = peerId(1);
