@@ -1,0 +1,67 @@
+# B6 flash-crowd control: the same asset and seed as B3, origin fallback, no EDGE.
+# Live 10/25/50 client counts stay Phase 10. This file only names the ladder.
+# Nothing here is a target or a claim; numbers come out of a run.
+scenarioId: b6-flash-crowd-peer-only
+baseline: B6
+description: Peer swarm plus limited origin. No site EDGE.
+
+asset:
+  productId: game-x
+  version: 1.4.0
+  fileName: game-x-1.4.0.bin
+  sizeBytes: 67108864
+  chunkSizeBytes: 4194304
+
+run:
+  repetitions: 3
+  seed: 20260914
+  coldCache: true
+
+swarm:
+  maxPeers: 8
+  seederCount: 8
+  blockSizeBytes: 262144
+  outstandingRequestsPerPeer: 8
+  blockTimeoutMillis: 30000
+  handshakeTimeoutMillis: 10000
+  connectTimeoutMillis: 5000
+  stallTimeoutMillis: 120000
+  maxAttemptsPerBlock: 3
+
+topology:
+  leecher:
+    siteId: hq
+    networkGroupId: floor-2
+  seeders:
+    - { siteId: hq, networkGroupId: floor-2 }
+    - { siteId: hq, networkGroupId: floor-2 }
+    - { siteId: hq, networkGroupId: floor-9 }
+    - { siteId: hq, networkGroupId: floor-9 }
+    - { siteId: branch, networkGroupId: wifi }
+    - { siteId: branch, networkGroupId: wifi }
+    - { siteId: branch, networkGroupId: dc }
+    - { siteId: branch, networkGroupId: dc }
+
+scheduler:
+  sourcePolicy: LAPS
+  lapsWeights:
+    locality: 0.35
+    throughput: 0.30
+    rtt: 0.15
+    capacity: 0.10
+    health: 0.10
+  endgameThresholdBlocks: 16
+
+fallback:
+  edgeAfterMillis: 500
+  originAfterMillis: 2000
+  jitterMillis: 400
+  maxOriginInFlight: 2
+  pipelineFillTarget: 0.5
+
+edge:
+  count: 0
+
+churn:
+  killFractions: [0.0]
+  everyPeerHoldsEverything: true
