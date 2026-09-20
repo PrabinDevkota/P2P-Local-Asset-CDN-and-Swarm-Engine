@@ -9,12 +9,18 @@ import com.prabin.swarmedge.manifest.ChunkCache;
 import com.prabin.swarmedge.manifest.ChunkEntry;
 import com.prabin.swarmedge.manifest.ChunkStore;
 import com.prabin.swarmedge.manifest.ReleaseManifest;
+import com.prabin.swarmedge.origin.OriginByteLedger;
 import com.prabin.swarmedge.peer.chunk.ChunkAssembler;
 import com.prabin.swarmedge.peer.chunk.ChunkInventory;
+import com.prabin.swarmedge.peer.fallback.HybridDownloader;
 import com.prabin.swarmedge.peer.laps.PeerSelector;
 import com.prabin.swarmedge.peer.net.SeederServer;
+import com.prabin.swarmedge.peer.origin.OriginChunkFetcher;
+import com.prabin.swarmedge.peer.origin.OriginDownloader;
 import com.prabin.swarmedge.peer.session.BlockSender;
 import com.prabin.swarmedge.peer.session.LeecherHandler;
+import com.prabin.swarmedge.peer.session.PeerAuthPolicy;
+import com.prabin.swarmedge.peer.session.SeederHandler;
 import com.prabin.swarmedge.peer.swarm.SwarmDownloader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,6 +28,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -37,7 +44,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
- * Baselines B1, B2, and B3: rebuild one asset from a swarm and record what each run cost.
+ * Baselines B1–B3 and B6: rebuild one asset from a swarm and record what each run cost.
  *
  * <p>Which baseline it is comes entirely from the scenario's {@code scheduler} section.
  * The runner is the same code in all three cases, which is the point — if each baseline
@@ -65,6 +72,8 @@ public final class SwarmRunner {
     private final Path workDir;
     private final Path sourceFile;
     private final AssetId assetId;
+    private final URI originBase;
+    private final OriginByteLedger originLedger;
     private PeerSelector selector;
 
     /**
@@ -72,10 +81,21 @@ public final class SwarmRunner {
      *                   would have fetched these chunks from origin first
      */
     public SwarmRunner(SwarmScenarioConfig config, Path workDir, Path sourceFile, AssetId assetId) {
+        this(config, workDir, sourceFile, assetId, null, null);
+    }
+
+    /**
+     * B6 path: origin Range GETs are billed on {@code originLedger} under each run id.
+     * B1–B3 callers omit both; a missing {@code fallback} section keeps today's path.
+     */
+    public SwarmRunner(SwarmScenarioConfig config, Path workDir, Path sourceFile, AssetId assetId,
+                       URI originBase, OriginByteLedger originLedger) {
         this.config = Objects.requireNonNull(config, "config");
         this.workDir = Objects.requireNonNull(workDir, "workDir");
         this.sourceFile = Objects.requireNonNull(sourceFile, "sourceFile");
         this.assetId = Objects.requireNonNull(assetId, "assetId");
+        this.originBase = originBase;
+        this.originLedger = originLedger;
     }
 
     /** The manifest must already be signature-verified by the caller. */
@@ -99,18 +119,28 @@ public final class SwarmRunner {
     private RunResult runOnce(ReleaseManifest manifest, String runId, Path storeRoot,
                               double killFraction, int runIndex) throws IOException, InterruptedException {
         List<SeederServer> seeders = new ArrayList<>();
+        List<SeederServer> edges = new ArrayList<>();
         try {
             for (int i = 0; i < config.seederCount(); i++) {
                 seeders.add(startSeeder(manifest, runId, i));
+            }
+            for (int i = 0; i < config.edgeCount(); i++) {
+                edges.add(startEdge(manifest, runId, i));
             }
             List<PeerSelector.Candidate> candidates = new ArrayList<>();
             for (int i = 0; i < seeders.size(); i++) {
                 candidates.add(PeerSelector.Candidate.of(
                         seeders.get(i).address(), seederPeerId(i), seederLocality(i)));
             }
+            List<PeerSelector.Candidate> edgeCandidates = new ArrayList<>();
+            for (int i = 0; i < edges.size(); i++) {
+                edgeCandidates.add(PeerSelector.Candidate.edge(
+                        edges.get(i).address(), edgePeerId(i), config.edgeLocality()));
+            }
 
             try (ChunkCache cache = ChunkCache.open(storeRoot)) {
                 ChunkStore store = cache.store();
+                long cacheBytes = cacheBytes(manifest, store);
                 ChunkInventory inventory = new ChunkInventory(manifest, store);
                 Path output = workDir.resolve(runId).resolve(manifest.fileName());
 
@@ -121,26 +151,41 @@ public final class SwarmRunner {
                         workDir.resolve(runId).resolve("staging"));
                      SwarmDownloader swarm = new SwarmDownloader(swarmSettings(), inventory, assembler, selector)) {
 
-                    var asset = selector == null
-                            ? swarm.start(candidates.stream().map(PeerSelector.Candidate::address).toList())
-                            : swarm.startPreferring(candidates);
-                    killPeers(seeders, killFraction, runIndex);
-                    result = await(asset);
+                    if (config.fallback() != null) {
+                        OriginChunkFetcher fetcher = originBase == null ? null
+                                : new OriginChunkFetcher(originBase, manifest.fileName(), store,
+                                OriginDownloader.Settings.defaults().withRunId(runId));
+                        try (HybridDownloader hybrid = new HybridDownloader(swarm, fetcher, inventory,
+                                config.fallback(), config.seed() + runIndex, edgeCandidates)) {
+                            var asset = hybrid.start(candidates);
+                            killPeers(seeders, killFraction, runIndex);
+                            result = await(asset).swarm();
+                        }
+                    } else {
+                        var asset = selector == null
+                                ? swarm.start(candidates.stream().map(PeerSelector.Candidate::address).toList())
+                                : swarm.startPreferring(candidates);
+                        killPeers(seeders, killFraction, runIndex);
+                        result = await(asset);
+                    }
                 }
                 new AssetMaterializer(store).materialize(manifest.chunks(), output);
                 long elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000;
 
-                long peerBytes = seeders.stream()
-                        .mapToLong(seeder -> seeder.lastSession().map(session -> session.bytesSent()).orElse(0L))
-                        .sum();
+                long peerBytes = servedBytes(seeders);
+                long edgeBytes = servedBytes(edges);
+                long originBytes = originLedger == null ? 0L : originLedger.bytes(runId, manifest.fileName());
+                long originPeakBytes = originLedger == null ? 0L : originLedger.peakBytes(runId, manifest.fileName());
                 RunResult run = new RunResult(runId, killFraction, sha256OfFile(output), Files.size(output),
-                        peerBytes, result.peersDialled(), result.peersLost(), elapsedMillis);
-                log.info("{} run {} asset={} peerBytes={} peersLost={} elapsedMs={}",
-                        config.baseline(), runId, run.assetSha256(), run.peerBytes(), run.peersLost(),
-                        run.elapsedMillis());
+                        peerBytes, result.peersDialled(), result.peersLost(), elapsedMillis,
+                        originBytes, originPeakBytes, edgeBytes, cacheBytes);
+                log.info("{} run {} asset={} peerBytes={} edgeBytes={} originBytes={} cacheBytes={} peersLost={} elapsedMs={}",
+                        config.baseline(), runId, run.assetSha256(), run.peerBytes(), run.edgeBytes(),
+                        run.originBytes(), run.cacheBytes(), run.peersLost(), run.elapsedMillis());
                 return run;
             }
         } finally {
+            edges.forEach(SeederServer::close);
             seeders.forEach(SeederServer::close);
         }
     }
@@ -172,6 +217,18 @@ public final class SwarmRunner {
                 BlockSender.Mode.FILE_REGION, config.blockSizeBytes()));
     }
 
+    /** Same binary as a desktop seeder; the upload budget and Candidate role are the EDGE. */
+    private SeederServer startEdge(ReleaseManifest manifest, String runId, int index) throws IOException {
+        Path root = workDir.resolve(runId).resolve("edge-" + index);
+        ChunkStore store = new ChunkStore(root);
+        stockAll(manifest, store);
+        ChunkInventory inventory = new ChunkInventory(manifest, store);
+        return new SeederServer(new SeederServer.Config(0, assetId, edgePeerId(index), inventory, store,
+                BlockSender.Mode.FILE_REGION, PeerAuthPolicy.ACCEPT_ANY_TOKEN, config.blockSizeBytes(),
+                config.blockSizeBytes(), config.blockSizeBytes() * 4, config.handshakeTimeout(),
+                SeederHandler.Settings.edge(config.edgeUploadBytesPerSecond())));
+    }
+
     /**
      * Give a seeder its chunks. With {@code everyPeerHoldsEverything} off, seeder
      * {@code i} holds the chunks where {@code chunkIndex % seederCount == i}, which is
@@ -187,6 +244,31 @@ public final class SwarmRunner {
             System.arraycopy(asset, (int) chunk.offset(), bytes, 0, bytes.length);
             store.putVerified(chunk.sha256(), bytes);
         }
+    }
+
+    private void stockAll(ReleaseManifest manifest, ChunkStore store) throws IOException {
+        byte[] asset = Files.readAllBytes(sourceFile);
+        for (ChunkEntry chunk : manifest.chunks()) {
+            byte[] bytes = new byte[(int) chunk.length()];
+            System.arraycopy(asset, (int) chunk.offset(), bytes, 0, bytes.length);
+            store.putVerified(chunk.sha256(), bytes);
+        }
+    }
+
+    private static long servedBytes(List<SeederServer> servers) {
+        return servers.stream()
+                .mapToLong(server -> server.lastSession().map(session -> session.bytesSent()).orElse(0L))
+                .sum();
+    }
+
+    private static long cacheBytes(ReleaseManifest manifest, ChunkStore store) throws IOException {
+        long cached = 0L;
+        for (ChunkEntry chunk : manifest.chunks()) {
+            if (store.hasVerified(chunk.sha256())) {
+                cached += chunk.length();
+            }
+        }
+        return cached;
     }
 
     private SwarmDownloader.Settings swarmSettings() {
@@ -235,6 +317,13 @@ public final class SwarmRunner {
         return PeerId.of(bits);
     }
 
+    private static PeerId edgePeerId(int index) {
+        byte[] bits = new byte[16];
+        bits[0] = 0x03;
+        bits[1] = (byte) index;
+        return PeerId.of(bits);
+    }
+
     private <T> T await(java.util.concurrent.CompletableFuture<T> future)
             throws IOException, InterruptedException {
         try {
@@ -268,8 +357,11 @@ public final class SwarmRunner {
     }
 
     /**
-     * @param peerBytes bytes the seeders actually served, which is the swarm's share of
-     *                  the transfer and the number B0 has nothing to compare against
+     * @param peerBytes        bytes desktop seeders actually served
+     * @param originBytes      origin Range bytes billed to this run, or 0 on B1–B3
+     * @param originPeakBytes  busiest one-second origin window, or 0 on B1–B3
+     * @param edgeBytes        bytes the site EDGE served, or 0 when none ran
+     * @param cacheBytes       verified local bytes already present before this run
      */
     public record RunResult(
             String runId,
@@ -279,7 +371,11 @@ public final class SwarmRunner {
             long peerBytes,
             int peersDialled,
             int peersLost,
-            long elapsedMillis
+            long elapsedMillis,
+            long originBytes,
+            long originPeakBytes,
+            long edgeBytes,
+            long cacheBytes
     ) {
     }
 
