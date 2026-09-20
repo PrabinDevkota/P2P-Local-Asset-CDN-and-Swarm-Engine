@@ -6,6 +6,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -99,6 +100,23 @@ class OriginByteLedgerTest {
 
         assertThat(ledger.bytes("run-1", "game-x.bin")).isEqualTo(3L * threads * perThread);
         assertThat(ledger.requests("run-1", "game-x.bin")).isEqualTo((long) threads * perThread);
+    }
+
+    @Test
+    void aOneSecondWindowIsThePeakNotTheTotal() {
+        AtomicLong clock = new AtomicLong();
+        OriginByteLedger ledger = new OriginByteLedger(clock::get);
+
+        ledger.recordServed("run-1", "game-x.bin", 100);
+        ledger.recordServed("run-1", "game-x.bin", 50);
+        clock.set(1_000);
+        ledger.recordServed("run-1", "game-x.bin", 40);
+
+        assertThat(ledger.bytes("run-1", "game-x.bin")).isEqualTo(190);
+        assertThat(ledger.peakBytes("run-1", "game-x.bin")).isEqualTo(150);
+        assertThat(ledger.peakBytesForRun("run-1")).isEqualTo(150);
+        assertThat(ledger.peakBytes("run-1", "missing.bin")).isZero();
+        assertThat(ledger.peakBytesForRun("nobody")).isZero();
     }
 
     @Test
