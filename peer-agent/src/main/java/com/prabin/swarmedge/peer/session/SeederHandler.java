@@ -22,6 +22,7 @@ import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 
 /**
  * Serves verified chunks to one connected leecher (blueprint §7.2 to §7.5).
@@ -34,7 +35,10 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>Reads and sends happen on a disk executor, never on the event loop. Requests wait
  * in a bounded queue and are only handed to the executor while the channel is writable,
- * so a slow reader throttles us instead of filling our memory (blueprint §12.3).
+ * so a slow reader throttles us instead of filling our memory (blueprint §12.3). An
+ * administrative upload budget (P8-01) is a token bucket on top of that: when it is
+ * empty the answer is the same {@link #BUSY} as a full queue, so an EDGE can be given
+ * more room without inventing a new error.
  *
  * <p>A connection that never finishes its handshake is dropped on a deadline. Without
  * it, opening sockets and saying nothing would be enough to tie up a seeder for as long
@@ -49,9 +53,6 @@ public final class SeederHandler extends SimpleChannelInboundHandler<Object> {
     /** ERROR code for a request that arrived while the send queue was full. */
     public static final int BUSY = 2;
 
-    private static final int MAX_QUEUED_REQUESTS = 32;
-    private static final int MAX_CONCURRENT_SENDS = 2;
-
     private final AssetId assetId;
     private final ChunkInventory inventory;
     private final ChunkStore store;
@@ -59,6 +60,8 @@ public final class SeederHandler extends SimpleChannelInboundHandler<Object> {
     private final Executor diskExecutor;
     private final PeerAuthPolicy authPolicy;
     private final Duration handshakeTimeout;
+    private final Settings settings;
+    private final UploadBudget budget;
     private final PeerSession session;
 
     private final Deque<Pending> queue = new ArrayDeque<>();
@@ -74,6 +77,13 @@ public final class SeederHandler extends SimpleChannelInboundHandler<Object> {
     public SeederHandler(AssetId assetId, PeerId localPeerId, ChunkInventory inventory, ChunkStore store,
                          BlockSender sender, Executor diskExecutor, PeerAuthPolicy authPolicy,
                          int preferredMaxBlockSize, Duration handshakeTimeout) {
+        this(assetId, localPeerId, inventory, store, sender, diskExecutor, authPolicy,
+                preferredMaxBlockSize, handshakeTimeout, Settings.desktop());
+    }
+
+    public SeederHandler(AssetId assetId, PeerId localPeerId, ChunkInventory inventory, ChunkStore store,
+                         BlockSender sender, Executor diskExecutor, PeerAuthPolicy authPolicy,
+                         int preferredMaxBlockSize, Duration handshakeTimeout, Settings settings) {
         this.assetId = Objects.requireNonNull(assetId, "assetId");
         this.inventory = Objects.requireNonNull(inventory, "inventory");
         this.store = Objects.requireNonNull(store, "store");
@@ -81,9 +91,11 @@ public final class SeederHandler extends SimpleChannelInboundHandler<Object> {
         this.diskExecutor = Objects.requireNonNull(diskExecutor, "diskExecutor");
         this.authPolicy = Objects.requireNonNull(authPolicy, "authPolicy");
         this.handshakeTimeout = Objects.requireNonNull(handshakeTimeout, "handshakeTimeout");
+        this.settings = Objects.requireNonNull(settings, "settings");
         if (handshakeTimeout.isNegative() || handshakeTimeout.isZero()) {
             throw new IllegalArgumentException("handshakeTimeout must be positive");
         }
+        this.budget = new UploadBudget(settings.uploadBytesPerSecond());
         this.session = new PeerSession(PeerSession.Role.SEEDER, assetId, localPeerId,
                 inventory.chunkCount(), preferredMaxBlockSize);
     }
@@ -223,8 +235,12 @@ public final class SeederHandler extends SimpleChannelInboundHandler<Object> {
             sendError(ctx, CHUNK_UNAVAILABLE, "chunk " + request.chunkIndex() + " not cached", frame.requestId());
             return;
         }
-        if (queue.size() >= MAX_QUEUED_REQUESTS) {
+        if (queue.size() >= settings.maxQueuedRequests()) {
             sendError(ctx, BUSY, "send queue is full", frame.requestId());
+            return;
+        }
+        if (!budget.tryConsume(request.blockLength())) {
+            sendError(ctx, BUSY, "upload budget exhausted", frame.requestId());
             return;
         }
         queue.addLast(new Pending(frame.requestId(), request.chunkIndex(),
@@ -235,7 +251,15 @@ public final class SeederHandler extends SimpleChannelInboundHandler<Object> {
     private void onCancel(PeerFrame frame) {
         long requestId = Messages.decodeCancel(frame).requestId();
         // Work already handed to the disk executor cannot be recalled; queued work can.
-        if (queue.removeIf(pending -> pending.requestId() == requestId)) {
+        Pending cancelled = null;
+        for (Pending pending : queue) {
+            if (pending.requestId() == requestId) {
+                cancelled = pending;
+                break;
+            }
+        }
+        if (cancelled != null && queue.remove(cancelled)) {
+            budget.refund(cancelled.blockLength());
             requestsCancelledBeforeSend.incrementAndGet();
         }
     }
@@ -260,7 +284,7 @@ public final class SeederHandler extends SimpleChannelInboundHandler<Object> {
 
     /** Hand queued requests to the disk executor while the socket is willing to take more. */
     private void pump(ChannelHandlerContext ctx) {
-        while (inFlight < MAX_CONCURRENT_SENDS && !queue.isEmpty() && ctx.channel().isWritable()) {
+        while (inFlight < settings.maxConcurrentSends() && !queue.isEmpty() && ctx.channel().isWritable()) {
             Pending pending = queue.pollFirst();
             inFlight++;
             diskExecutor.execute(() -> {
@@ -327,5 +351,94 @@ public final class SeederHandler extends SimpleChannelInboundHandler<Object> {
     }
 
     private record Pending(long requestId, int chunkIndex, int blockOffset, int blockLength, String sha256) {
+    }
+
+    /**
+     * Queue depth, in-flight sends, and the administrative upload ceiling (P8-01).
+     * Desktop defaults are what this handler used before the settings existed, so B1–B3
+     * do not move. EDGE is the same binary with more room and a finite byte rate.
+     *
+     * @param maxQueuedRequests     how many REQUEST frames may wait for disk
+     * @param maxConcurrentSends    how many disk reads may be in flight
+     * @param uploadBytesPerSecond  token-bucket rate; {@link Long#MAX_VALUE} is unlimited
+     */
+    public record Settings(int maxQueuedRequests, int maxConcurrentSends, long uploadBytesPerSecond) {
+
+        public Settings {
+            if (maxQueuedRequests <= 0) {
+                throw new IllegalArgumentException("maxQueuedRequests must be positive");
+            }
+            if (maxConcurrentSends <= 0) {
+                throw new IllegalArgumentException("maxConcurrentSends must be positive");
+            }
+            if (uploadBytesPerSecond <= 0) {
+                throw new IllegalArgumentException("uploadBytesPerSecond must be positive");
+            }
+        }
+
+        public static Settings desktop() {
+            return new Settings(32, 2, Long.MAX_VALUE);
+        }
+
+        public static Settings edge(long uploadBytesPerSecond) {
+            return new Settings(128, 8, uploadBytesPerSecond);
+        }
+    }
+
+    /**
+     * Token bucket for the upload ceiling. Unlimited ({@link Long#MAX_VALUE}) never
+     * refuses. A finite rate starts full (one second of burst) and refills from the
+     * clock; a REQUEST that does not fit is refused rather than queued for later.
+     */
+    public static final class UploadBudget {
+
+        private final long bytesPerSecond;
+        private final LongSupplier nanoTime;
+        private double tokens;
+        private long lastNanos;
+
+        public UploadBudget(long bytesPerSecond) {
+            this(bytesPerSecond, System::nanoTime);
+        }
+
+        public UploadBudget(long bytesPerSecond, LongSupplier nanoTime) {
+            if (bytesPerSecond <= 0) {
+                throw new IllegalArgumentException("uploadBytesPerSecond must be positive");
+            }
+            this.bytesPerSecond = bytesPerSecond;
+            this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
+            this.tokens = bytesPerSecond == Long.MAX_VALUE ? Double.POSITIVE_INFINITY : bytesPerSecond;
+            this.lastNanos = nanoTime.getAsLong();
+        }
+
+        public synchronized boolean tryConsume(long bytes) {
+            if (bytes <= 0) {
+                throw new IllegalArgumentException("bytes must be positive");
+            }
+            if (bytesPerSecond == Long.MAX_VALUE) {
+                return true;
+            }
+            refill();
+            if (tokens < bytes) {
+                return false;
+            }
+            tokens -= bytes;
+            return true;
+        }
+
+        public synchronized void refund(long bytes) {
+            if (bytes <= 0 || bytesPerSecond == Long.MAX_VALUE) {
+                return;
+            }
+            refill();
+            tokens = Math.min(bytesPerSecond, tokens + bytes);
+        }
+
+        private void refill() {
+            long now = nanoTime.getAsLong();
+            double elapsed = Math.max(0, now - lastNanos) / 1_000_000_000.0;
+            tokens = Math.min(bytesPerSecond, tokens + elapsed * bytesPerSecond);
+            lastNanos = now;
+        }
     }
 }
