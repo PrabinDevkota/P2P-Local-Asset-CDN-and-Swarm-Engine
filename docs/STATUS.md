@@ -133,10 +133,19 @@ The store and index already existed. What this phase adds is the policy that use
 
 B4 is B0 with `coldCache: false` and a recorded cache ceiling. The first repetition still pays origin; later ones must show origin bytes at zero and cache bytes covering the asset. No offload percentage is asserted.
 
-Not covered in this phase: EDGE / origin fallback (Phase 8), shrinking the request window, and immutable `research/raw/` folders (P10-03).
+Not covered in this phase: shrinking the request window, and immutable `research/raw/` folders (P10-03).
+
+## Phase 8 — EDGE role + progressive fallback — done
+
+- [x] P8-01 EDGE is the same `peer-agent` binary: larger upload budget, `BUSY` when the bucket is empty; healthy same-site EDGE ranks first
+- [x] P8-02 `FallbackPolicy` with deterministic jitter; `SwarmDownloader.offer` admits EDGE mid-run; stall does not kill a live origin fetch
+- [x] P8-03 `OriginChunkFetcher` cancellable Range GET; `HybridDownloader` first-arrival-wins at chunk granularity
+- [x] P8-04 `OriginByteLedger` 1 s peak; `research/configs/b6-*.yaml` same asset/seed as B3; `SwarmRunner` records origin / peak / EDGE / peer / cache bytes
+
+EDGE is process policy, not a new protocol role and not a tracker announce field. Origin stays chunk-granular HTTP. B1–B3 YAML and LAPS default weights are unchanged. B6 claims no Mbps or offload %. Live 10/25/50 client counts stay Phase 10.
 
 ## Not started
 
-- Phases 8–12 as in the blueprint
+- Phases 9–12 as in the blueprint
 
 Peers must call `ManifestVerifier` with a trusted public key. `ManifestJson.parse` only checks JSON shape.
