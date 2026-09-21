@@ -51,7 +51,7 @@ class B0RunnerTest {
         KeyPair keys = Ed25519Keys.generate();
         manifest = ManifestSigner.sign(
                 ReleaseManifestFactory.unsigned("game-x", "1.4.0", published, CHUNK_SIZE, chunks,
-                        "2026-09-12T00:00:00Z", "2026-10-12T00:00:00Z", 1, "release-key-2026-01"),
+                        "2026-09-12T00:00:00Z", "2027-12-31T00:00:00Z", 1, "release-key-2026-01"),
                 keys.getPrivate());
         ManifestVerifier.verify(manifest, keys.getPublic());
     }
