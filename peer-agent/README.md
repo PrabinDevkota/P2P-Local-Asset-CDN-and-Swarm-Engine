@@ -88,4 +88,8 @@ Rules worth remembering when editing this module:
 
 EDGE is process policy (`SeederHandler.Settings.edge`, `PeerSelector.Candidate.edge`). It is not a new protocol frame and is not announced to the tracker.
 
+## Reputation (Phase 9)
+
+`PeerQuarantine` counts hash mismatches and protocol violations. Crossing the strike threshold makes that `PeerId` ineligible to dial for a cooldown. LAPS may still *score* a connected session; it cannot make a quarantined peer eligible, and it cannot skip SHA-256 on a chunk that does arrive.
+
 Not wired yet: `SwarmNode` still has no CLI to point a seeder at a manifest, and the token in HELLO is carried but not verified (`PeerAuthPolicy` is where that lands).
