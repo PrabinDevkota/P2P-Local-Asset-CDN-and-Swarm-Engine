@@ -131,25 +131,33 @@ public final class HybridDownloader implements AutoCloseable {
     }
 
     private void offerEdge() {
-        if (completion.isDone() || edges.isEmpty() || edgeOffered.get()) {
-            return;
+        try {
+            if (completion.isDone() || edges.isEmpty() || edgeOffered.get()) {
+                return;
+            }
+            if (swarm.pipelineFill() >= policy.pipelineFillTarget()) {
+                log.debug("EDGE delayed: pipeline fill {} is at or above {}", swarm.pipelineFill(),
+                        policy.pipelineFillTarget());
+                return;
+            }
+            edgeOffered.set(true);
+            swarm.offer(edges);
+        } catch (RuntimeException e) {
+            log.warn("EDGE offer failed: {}", e.toString());
         }
-        if (swarm.pipelineFill() >= policy.pipelineFillTarget()) {
-            log.debug("EDGE delayed: pipeline fill {} is at or above {}", swarm.pipelineFill(),
-                    policy.pipelineFillTarget());
-            return;
-        }
-        edgeOffered.set(true);
-        swarm.offer(edges);
     }
 
     private void openOrigin() {
-        if (completion.isDone() || origin == null || inventory.complete()) {
-            return;
+        try {
+            if (completion.isDone() || origin == null || inventory.complete()) {
+                return;
+            }
+            originOpen.set(true);
+            swarm.holdStall(true);
+            fillOrigin();
+        } catch (RuntimeException e) {
+            log.warn("origin open failed: {}", e.toString());
         }
-        originOpen.set(true);
-        swarm.holdStall(true);
-        fillOrigin();
     }
 
     private void fillOrigin() {
@@ -173,11 +181,11 @@ public final class HybridDownloader implements AutoCloseable {
     private void onOrigin(int chunkIndex, Boolean stored, Throwable error) {
         originFetching.remove(chunkIndex);
         if (Boolean.TRUE.equals(stored)) {
-            originChunks.incrementAndGet();
             if (!inventory.has(chunkIndex)) {
+                // Count before settle: acceptForeignChunk can finish the swarm here.
+                originChunks.incrementAndGet();
                 inventory.markStored(chunkIndex);
             }
-            // Count first: acceptForeignChunk can finish the swarm on this thread.
             swarm.acceptForeignChunk(chunkIndex);
         } else if (error != null) {
             originFailed.add(chunkIndex);
@@ -191,18 +199,22 @@ public final class HybridDownloader implements AutoCloseable {
      * flash crowd does not keep the bytes.
      */
     private void reconcile() {
-        if (origin == null || completion.isDone()) {
-            return;
-        }
-        for (int chunkIndex : Set.copyOf(originFetching)) {
-            if (inventory.has(chunkIndex)) {
-                origin.cancel(chunkIndex);
+        try {
+            if (origin == null || completion.isDone()) {
+                return;
             }
-        }
-        if (originOpen.get()) {
-            fillOrigin();
-        } else {
-            releaseStallIfQuiet();
+            for (int chunkIndex : Set.copyOf(originFetching)) {
+                if (inventory.has(chunkIndex)) {
+                    origin.cancel(chunkIndex);
+                }
+            }
+            if (originOpen.get()) {
+                fillOrigin();
+            } else {
+                releaseStallIfQuiet();
+            }
+        } catch (RuntimeException e) {
+            log.warn("origin reconcile failed: {}", e.toString());
         }
     }
 
