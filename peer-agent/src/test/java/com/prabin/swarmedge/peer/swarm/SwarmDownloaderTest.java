@@ -12,6 +12,7 @@ import com.prabin.swarmedge.manifest.ReleaseManifestFactory;
 import com.prabin.swarmedge.peer.chunk.ChunkAssembler;
 import com.prabin.swarmedge.peer.chunk.ChunkInventory;
 import com.prabin.swarmedge.peer.laps.LapsWeights;
+import com.prabin.swarmedge.peer.laps.PeerQuarantine;
 import com.prabin.swarmedge.peer.laps.PeerSelector;
 import com.prabin.swarmedge.peer.net.SeederServer;
 import com.prabin.swarmedge.peer.session.BlockSender;
@@ -193,6 +194,31 @@ class SwarmDownloaderTest {
 
         assertThatThrownBy(() -> await(asset))
                 .hasMessageContaining("ran out of peers");
+        assertThat(leecher.inventory().complete()).isFalse();
+    }
+
+    @Test
+    void aQuarantinedPeerIsNotDialled() throws Exception {
+        Locality here = new Locality("hq", "floor-2");
+        PeerId banned = PeerId.of(filled((byte) 9, 16));
+        PeerQuarantine quarantine = new PeerQuarantine(
+                java.time.Clock.systemUTC(), new PeerQuarantine.Settings(1, Duration.ofHours(1)));
+        quarantine.noteHashMismatch(banned);
+        PeerSelector selector = new PeerSelector(LapsWeights.localityOnly(), here, SEED, quarantine);
+        InetSocketAddress address = server(seederStore("banned", allChunks()),
+                BlockSender.Mode.BUFFERED, banned).address();
+        Leecher leecher = leecher("leecher");
+        SwarmDownloader swarm = new SwarmDownloader(
+                SwarmDownloader.Settings.withoutEndgame(assetId, leecher.peerId(), token(),
+                        sessionSettings(Duration.ofSeconds(5)), Duration.ofSeconds(5), 1, SEED,
+                        Duration.ofSeconds(30)),
+                leecher.inventory(), leecher.assembler(), selector, quarantine);
+        swarms.add(swarm);
+
+        assertThatThrownBy(() -> await(swarm.startPreferring(List.of(
+                PeerSelector.Candidate.of(address, banned, here)))))
+                .hasMessageContaining("peers");
+        assertThat(swarm.connectedPeers()).isZero();
         assertThat(leecher.inventory().complete()).isFalse();
     }
 
