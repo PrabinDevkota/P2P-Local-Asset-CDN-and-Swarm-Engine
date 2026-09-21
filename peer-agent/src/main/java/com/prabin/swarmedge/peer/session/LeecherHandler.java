@@ -439,6 +439,7 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
     private void onChunkRejected(ChannelHandlerContext ctx, ChunkAssembler.VerificationFailed failure) {
         pendingCommits--;
         hashMismatches++;
+        events.hashMismatch();
         plan.requeueChunk(failure.chunkIndex());
         if (plan.soleSource()) {
             // One peer, one source of bytes: there is no better peer to ask, so stop.
