@@ -3,6 +3,7 @@ package com.prabin.swarmedge.benchmark;
 import com.prabin.swarmedge.common.id.Hex;
 import com.prabin.swarmedge.manifest.AssetMaterializer;
 import com.prabin.swarmedge.manifest.ChunkCache;
+import com.prabin.swarmedge.manifest.ReleaseFreshness;
 import com.prabin.swarmedge.manifest.ReleaseManifest;
 import com.prabin.swarmedge.peer.origin.OriginDownloader;
 import org.slf4j.Logger;
@@ -14,6 +15,7 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
+import java.time.Clock;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
@@ -40,9 +42,10 @@ public final class B0Runner {
         this.workDir = Objects.requireNonNull(workDir, "workDir");
     }
 
-    /** The manifest must already be signature-verified by the caller. */
+    /** The manifest must already be signature-verified by the caller. Freshness is checked here. */
     public Summary run(ReleaseManifest manifest) throws IOException, InterruptedException {
         Objects.requireNonNull(manifest, "manifest");
+        new ReleaseFreshness(Clock.systemUTC()).accept(manifest);
         Files.createDirectories(workDir);
         Path sharedStore = workDir.resolve("shared-store");
         List<RunResult> runs = new ArrayList<>(config.repetitions());
