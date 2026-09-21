@@ -8,6 +8,7 @@ import com.prabin.swarmedge.manifest.AssetMaterializer;
 import com.prabin.swarmedge.manifest.ChunkCache;
 import com.prabin.swarmedge.manifest.ChunkEntry;
 import com.prabin.swarmedge.manifest.ChunkStore;
+import com.prabin.swarmedge.manifest.ReleaseFreshness;
 import com.prabin.swarmedge.manifest.ReleaseManifest;
 import com.prabin.swarmedge.origin.OriginByteLedger;
 import com.prabin.swarmedge.peer.chunk.ChunkAssembler;
@@ -34,6 +35,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -98,9 +100,10 @@ public final class SwarmRunner {
         this.originLedger = originLedger;
     }
 
-    /** The manifest must already be signature-verified by the caller. */
+    /** The manifest must already be signature-verified by the caller. Freshness is checked here. */
     public Summary run(ReleaseManifest manifest) throws IOException, InterruptedException {
         Objects.requireNonNull(manifest, "manifest");
+        new ReleaseFreshness(Clock.systemUTC()).accept(manifest);
         Files.createDirectories(workDir);
         Path sharedStore = workDir.resolve("shared-store");
         List<RunResult> runs = new ArrayList<>();
