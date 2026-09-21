@@ -16,6 +16,7 @@ import java.util.Objects;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -77,7 +78,7 @@ public final class OriginChunkFetcher {
         }
         send.whenComplete((response, error) -> {
             inFlight.remove(chunk.index(), flight);
-            if (cancelled(send, error) || outcome.isDone()) {
+            if (flight.aborted.get() || cancelled(send, error) || outcome.isDone()) {
                 outcome.complete(false);
                 return;
             }
@@ -86,6 +87,10 @@ public final class OriginChunkFetcher {
                 return;
             }
             try {
+                if (flight.aborted.get()) {
+                    outcome.complete(false);
+                    return;
+                }
                 commit(chunk, response);
                 outcome.complete(true);
             } catch (Exception e) {
@@ -100,8 +105,9 @@ public final class OriginChunkFetcher {
         if (flight == null) {
             return;
         }
-        // Complete first so a CancellationException from send.cancel cannot look
-        // like a hard failure. Bytes that arrive after this are discarded.
+        // Abort first so a response that lands on this thread cannot putVerified.
+        // Complete before send.cancel so CancellationException is not a hard failure.
+        flight.aborted.set(true);
         cancelled.incrementAndGet();
         flight.outcome.complete(false);
         flight.send.cancel(true);
@@ -113,7 +119,11 @@ public final class OriginChunkFetcher {
         }
     }
 
-    private record Flight(CompletableFuture<HttpResponse<byte[]>> send, CompletableFuture<Boolean> outcome) {
+    private record Flight(CompletableFuture<HttpResponse<byte[]>> send, CompletableFuture<Boolean> outcome,
+                          AtomicBoolean aborted) {
+        Flight(CompletableFuture<HttpResponse<byte[]>> send, CompletableFuture<Boolean> outcome) {
+            this(send, outcome, new AtomicBoolean());
+        }
     }
 
     public long bytesReceived() {
