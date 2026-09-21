@@ -177,6 +177,21 @@ class PeerSelectorTest {
     }
 
     @Test
+    void aQuarantinedPeerIsNotEligibleEvenWhenNearest() {
+        PeerQuarantine quarantine = new PeerQuarantine(
+                java.time.Clock.systemUTC(), new PeerQuarantine.Settings(1, Duration.ofHours(1)));
+        quarantine.noteHashMismatch(peerId(3));
+        PeerSelector selector = new PeerSelector(LapsWeights.localityOnly(), ME, SEED, quarantine);
+        var remote = PeerSelector.Candidate.of(
+                new InetSocketAddress("10.0.0.1", 9091), peerId(1), new Locality("branch", "wifi"));
+        var nearButQuarantined = PeerSelector.Candidate.of(
+                new InetSocketAddress("10.0.0.3", 9091), peerId(3), ME);
+
+        assertThat(selector.rank(List.of(nearButQuarantined, remote))).containsExactly(remote);
+        assertThat(selector.rank(List.of(nearButQuarantined))).isEmpty();
+    }
+
+    @Test
     void theSamePeerAtTwoAddressesIsRejected() {
         PeerSelector selector = new PeerSelector(LapsWeights.defaults(), ME, SEED);
         PeerId duplicate = peerId(1);
