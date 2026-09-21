@@ -3,6 +3,7 @@ package com.prabin.tracker.api;
 import com.prabin.swarmedge.common.id.AssetId;
 import com.prabin.swarmedge.common.id.PeerId;
 import com.prabin.tracker.auth.PeerTokens;
+import com.prabin.tracker.rate.AnnounceRateLimiter;
 import com.prabin.tracker.store.PeerDirectory;
 import com.prabin.tracker.store.PeerRecord;
 import org.junit.jupiter.api.Test;
@@ -18,6 +19,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,7 +31,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @WebMvcTest(controllers = PeerController.class)
 @Import({TrackerExceptionHandler.class, PeerControllerTest.MemoryPeerDirectory.class,
-        PeerControllerTest.FixedTokens.class})
+        PeerControllerTest.FixedTokens.class, PeerControllerTest.GenerousLimiter.class})
 class PeerControllerTest {
 
     private static final String ASSET = "a".repeat(64);
@@ -167,6 +169,15 @@ class PeerControllerTest {
         @Bean
         PeerTokens peerTokens() {
             return new PeerTokens(SECRET, PeerTokens.DEFAULT_TTL, Clock.systemUTC());
+        }
+    }
+
+    /** Existing tests announce a handful of times; this cap is not the burst case. */
+    @TestConfiguration
+    static class GenerousLimiter {
+        @Bean
+        AnnounceRateLimiter announceRateLimiter() {
+            return new AnnounceRateLimiter.Memory(100, Duration.ofSeconds(1));
         }
     }
 }
