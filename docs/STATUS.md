@@ -46,7 +46,7 @@ Raw run folders (`research/raw/<runId>/` with `config.yaml`, `git_commit.txt`, `
 
 Announce now requires `Authorization: Bearer <token>`. A token for another peer, or one claiming a locality it was not issued for, is rejected with 401. Tokens are a dev/research stand-in for mTLS: they gate the control plane and never authorize content.
 
-Still open against blueprint §10: Actuator health / Prometheus, announce rate limiting, `asset:{assetId}:manifest-meta`, and the `capabilities` / `uploadBudget` announce fields that Phase 6 LAPS will need.
+Still open against blueprint §10: Actuator health / Prometheus, `asset:{assetId}:manifest-meta`, and the `capabilities` / `uploadBudget` announce fields. Announce rate limiting is Phase 9.
 
 Tracker never stores file bytes and is not a trust root.
 
@@ -144,8 +144,18 @@ Not covered in this phase: shrinking the request window, and immutable `research
 
 EDGE is process policy, not a new protocol role and not a tracker announce field. Origin stays chunk-granular HTTP. B1–B3 YAML and LAPS default weights are unchanged. B6 claims no Mbps or offload %. Live 10/25/50 client counts stay Phase 10.
 
+## Phase 9 — Security hardening — done
+
+- [x] P9-01 Manifest freshness: `ReleaseFreshness` refuses an expired `expiresAt` and a `sequence` behind the per-product high-water mark, with an explicit `StaleReleaseException`. `ManifestVerifier` stays crypto-only.
+- [x] P9-02 Peer reputation: `PeerQuarantine` after hash/protocol failures removes a peer from dial eligibility. SHA-256 is never skipped.
+- [x] P9-03 Secret/log audit: production log statements must not mention tokens, secrets, or private keys (`SecretLogAuditTest`). [`docs/SECURITY.md`](SECURITY.md) states the rule.
+- [x] P9-04 Security overhead: `research/configs/b9-security-overhead.yaml` plus `SecurityOverheadRunner` records hash / sign / verify / HMAC sample times and asserts none of them as an SLO.
+- [x] Announce rate limit: `rate:{peerId}:announce`; a burst is 429 and does not block another peer.
+
+Highest-seen sequence is per process (a restart forgets it). HELLO still carries an opaque token; `PeerAuthPolicy` remains the mTLS/HMAC seam. Actuator/Prometheus stay Phase 10.
+
 ## Not started
 
-- Phases 9–12 as in the blueprint
+- Phases 10–12 as in the blueprint
 
-Peers must call `ManifestVerifier` with a trusted public key. `ManifestJson.parse` only checks JSON shape.
+Peers must call `ManifestVerifier` with a trusted public key, then `ReleaseFreshness.accept`. `ManifestJson.parse` only checks JSON shape.
