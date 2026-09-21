@@ -6,6 +6,7 @@ import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyPair;
+import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
@@ -103,6 +104,7 @@ public final class ManifestCli {
     private static int verify(Map<String, String> flags, PrintStream out) throws Exception {
         ReleaseManifest manifest = ManifestJson.parse(Files.readString(Path.of(require(flags, "manifest"))));
         ManifestVerifier.verify(manifest, Ed25519Keys.readPublicKey(Path.of(require(flags, "public-key"))));
+        new ReleaseFreshness(Clock.systemUTC()).accept(manifest);
         out.println(CanonicalManifest.assetId(manifest).toHex());
         return 0;
     }
