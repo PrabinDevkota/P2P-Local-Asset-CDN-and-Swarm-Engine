@@ -49,11 +49,17 @@ public final class PeerSelector {
 
     private final LapsScorer scorer;
     private final Locality self;
+    private final PeerQuarantine quarantine;
     private final Map<PeerId, PeerMetrics> history = new HashMap<>();
 
     public PeerSelector(LapsWeights weights, Locality self, long tieBreakSeed) {
+        this(weights, self, tieBreakSeed, PeerQuarantine.none());
+    }
+
+    public PeerSelector(LapsWeights weights, Locality self, long tieBreakSeed, PeerQuarantine quarantine) {
         this.self = Objects.requireNonNull(self, "self");
         this.scorer = new LapsScorer(weights, self, tieBreakSeed);
+        this.quarantine = Objects.requireNonNull(quarantine, "quarantine");
     }
 
     /**
@@ -67,19 +73,29 @@ public final class PeerSelector {
                 key -> new PeerMetrics());
     }
 
-    /** Best first. Same candidates and same history always give the same order. */
+    /**
+     * Best first among peers that are still eligible. Same candidates and same history
+     * always give the same order. Quarantined peers are omitted, not scored last:
+     * eligibility is not a ranking term, and a hash mismatch still hashed.
+     */
     public synchronized List<Candidate> rank(List<Candidate> candidates) {
         Objects.requireNonNull(candidates, "candidates");
         Map<PeerId, Candidate> byPeer = new HashMap<>();
-        List<LapsCandidate> scored = new ArrayList<>(candidates.size());
+        List<Candidate> eligible = new ArrayList<>(candidates.size());
         for (Candidate candidate : candidates) {
             if (byPeer.put(candidate.peerId(), candidate) != null) {
                 throw new IllegalArgumentException("the same peer appears twice: " + candidate.peerId());
             }
+            if (!quarantine.isQuarantined(candidate.peerId())) {
+                eligible.add(candidate);
+            }
+        }
+        List<LapsCandidate> scored = new ArrayList<>(eligible.size());
+        for (Candidate candidate : eligible) {
             scored.add(new LapsCandidate(candidate.peerId(), candidate.locality(),
                     metricsFor(candidate.peerId()), candidate.advertisedUploadLoad()));
         }
-        List<Candidate> lapsOrder = new ArrayList<>(candidates.size());
+        List<Candidate> lapsOrder = new ArrayList<>(eligible.size());
         for (LapsScorer.Scored entry : scorer.rank(scored)) {
             lapsOrder.add(byPeer.get(entry.candidate().peerId()));
         }
