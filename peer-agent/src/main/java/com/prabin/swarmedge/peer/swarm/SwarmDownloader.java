@@ -372,6 +372,11 @@ public final class SwarmDownloader implements AutoCloseable {
             return;
         }
         if (sessions.isEmpty()) {
+            // Origin (or another foreign source) can still finish the asset. The stall
+            // watchdog stays armed for when that work also goes quiet.
+            if (holdStall) {
+                return;
+            }
             completion.completeExceptionally(new IOException("swarm ran out of peers with "
                     + scheduler.pendingBlocks() + " blocks still missing"));
         }
