@@ -8,6 +8,7 @@ import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -79,6 +80,28 @@ class ManifestCliTest {
                 "--public-key", impostor.resolve("public.pem").toString());
         assertThat(verify.code()).isEqualTo(1);
         assertThat(verify.err()).contains("invalid Ed25519 signature");
+    }
+
+    @Test
+    void verifyRejectsAnExpiredButValidlySignedManifest() throws Exception {
+        Path keys = tempDir.resolve("keys");
+        assertThat(run("gen-key", "--out-dir", keys.toString())).isZero();
+
+        Path file = tempDir.resolve("ten.bin");
+        Files.write(file, new byte[] {0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+        List<ChunkEntry> chunks = new FileChunker(4).chunk(file);
+        ReleaseManifest expired = ManifestSigner.sign(
+                ReleaseManifestFactory.unsigned("game-x", "1.4.0", file, 4, chunks,
+                        "2026-08-12T00:00:00Z", "2026-09-12T00:00:00Z", 1, "release-key-2026-01"),
+                Ed25519Keys.readPrivateKey(keys.resolve("private.pem")));
+        Path manifestPath = tempDir.resolve("expired.json");
+        Files.writeString(manifestPath, ManifestJson.toJson(expired));
+
+        Capture verify = capture("verify",
+                "--manifest", manifestPath.toString(),
+                "--public-key", keys.resolve("public.pem").toString());
+        assertThat(verify.code()).isEqualTo(1);
+        assertThat(verify.err()).contains("expired");
     }
 
     @Test
