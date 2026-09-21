@@ -48,4 +48,11 @@ public interface SessionEvents {
     /** A request timed out, was refused, or otherwise failed to deliver. */
     default void blockFailed() {
     }
+
+    /**
+     * A chunk this session helped assemble hashed wrong. Reputation may quarantine
+     * the peer; the bytes are still discarded either way.
+     */
+    default void hashMismatch() {
+    }
 }
