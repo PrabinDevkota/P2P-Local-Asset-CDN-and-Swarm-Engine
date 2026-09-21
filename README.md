@@ -8,7 +8,7 @@ This is an engineering system and a research testbed. The first paper focuses on
 
 ## Status
 
-Phases **0–8 are done** against the blueprint backlog. `./mvnw verify` is the gate and is green. **Phase 9** (security hardening) is next.
+Phases **0–9 are done** against the blueprint backlog. `./mvnw verify` is the gate and is green. **Phase 10** (experiment harness) is next.
 
 | Phase | State | What it is |
 | --- | --- | --- |
@@ -21,15 +21,16 @@ Phases **0–8 are done** against the blueprint backlog. `./mvnw verify` is the 
 | 6 | Done | Shared locality classes, EWMA goodput/RTT, LAPS scoring and dial order, endgame duplicates, configs for B1/B2/B3 |
 | 7 | Done | Cache lookup before network, LRU/quota eviction, warm-start inventory, baseline B4 |
 | 8 | Done | EDGE upload budget, deterministic fallback jitter, hybrid cancel-across-sources, baseline B6 |
-| 9+ | Later | Security hardening, experiment harness, FastCDC |
+| 9 | Done | Manifest freshness/rollback, peer quarantine, secret/log audit, B9 security overhead, announce rate limit |
+| 10+ | Later | Experiment harness, FastCDC |
 
 Trust rules that must not drift:
 
-- `ManifestJson.parse` checks JSON **shape** only. Callers must use `ManifestVerifier` with a **trusted public key**.
+- `ManifestJson.parse` checks JSON **shape** only. Callers must use `ManifestVerifier` with a **trusted public key**, then `ReleaseFreshness.accept`.
 - Origin serving a `.json` file is **distribution**, not a trust root.
 - The tracker is **not** a trust root and never carries file bytes.
 
-Checklist and phase ticks: [docs/STATUS.md](docs/STATUS.md). File-by-file plan: [docs/PHASE-PLAN.md](docs/PHASE-PLAN.md).
+Checklist and phase ticks: [docs/STATUS.md](docs/STATUS.md). File-by-file plan: [docs/PHASE-PLAN.md](docs/PHASE-PLAN.md). Security rules: [docs/SECURITY.md](docs/SECURITY.md).
 
 ## First principles
 
@@ -69,7 +70,7 @@ The warehouse is the shareable cache. Rebuilding the original file (game binary,
 │ (SEEDER/EDGE)│   blocks over TCP               │ (LEECHER)    │
 └──────────────┘                                 └──────────────┘
         │                                               │
-        └──────── progressive fallback (later) ─────────┘
+        └──────── progressive fallback (Phase 8) ─────────┘
                     → EDGE → origin HTTP
 ```
 
