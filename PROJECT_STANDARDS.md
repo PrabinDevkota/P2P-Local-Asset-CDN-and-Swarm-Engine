@@ -62,7 +62,7 @@ Working name: **SwarmEdge CDN** · Core scheduler research: **LAPS**
 - [ ] `GET /api/v1/assets/{assetId}/peers?limit=20` bounded ranking
 - [ ] Redis hash + **per-field TTL ~45s** (HEXPIRE / Redis ≥ 7.4)
 - [ ] Locality via siteId/networkGroupId (not hard-coded `/24`)
-- [ ] Rate limits, peer tokens (dev/research), Actuator health/metrics
+- [x] Rate limits and peer tokens (dev/research). Actuator health/metrics stay Phase 10
 
 ### Peer agent (`peer-agent/`)
 - [ ] Roles: LEECHER / SEEDER / EDGE (same binary)
@@ -81,19 +81,19 @@ Working name: **SwarmEdge CDN** · Core scheduler research: **LAPS**
 - [ ] Stage A: rarest-first (+ endgame later)
 - [ ] Stage B: locality then LAPS weights
 - [ ] SHA-256 full-chunk verify before seed
-- [ ] Reputation/quarantine after failures (never replaces crypto checks)
+- [x] Reputation/quarantine after failures (never replaces crypto checks)
 
 ---
 
 ## 5. Security
 
-- [ ] Threat model doc
-- [ ] Signed manifest + freshness/sequence policy
-- [ ] Peer token / auth hooks; production path toward mTLS
-- [ ] Strict protocol bounds; fuzz malformed frames
-- [ ] Secrets never in git or logs
+- [x] Threat model doc
+- [x] Signed manifest + freshness/sequence policy
+- [~] Peer token / auth hooks; production path toward mTLS
+- [x] Strict protocol bounds; fuzz malformed frames
+- [x] Secrets never in git or logs
 - [ ] SCA / image scan
-- [ ] `SECURITY.md`
+- [x] `SECURITY.md`
 
 ---
 
@@ -146,7 +146,7 @@ Working name: **SwarmEdge CDN** · Core scheduler research: **LAPS**
 
 - [ ] PR: compile + unit + protocol goldens + style
 - [ ] Testcontainers Redis/tracker/two-peer when ready
-- [ ] Image build; secret/log scan
+- [ ] Image build; secret/log scan is a unit test (`SecretLogAuditTest`), image scan is later
 - [ ] Nightly bench smoke (not every PR if heavy)
 
 ---
