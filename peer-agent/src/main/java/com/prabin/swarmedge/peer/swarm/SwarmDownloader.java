@@ -5,10 +5,12 @@ import com.prabin.swarmedge.common.id.PeerId;
 import com.prabin.swarmedge.peer.chunk.BlockPlan;
 import com.prabin.swarmedge.peer.chunk.ChunkAssembler;
 import com.prabin.swarmedge.peer.chunk.ChunkInventory;
+import com.prabin.swarmedge.peer.laps.PeerQuarantine;
 import com.prabin.swarmedge.peer.laps.PeerSelector;
 import com.prabin.swarmedge.peer.net.LeecherClient;
 import com.prabin.swarmedge.peer.session.LeecherHandler;
 import com.prabin.swarmedge.peer.session.SessionEvents;
+import com.prabin.swarmedge.protocol.ProtocolViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -71,6 +73,7 @@ public final class SwarmDownloader implements AutoCloseable {
     private final CompletableFuture<Result> completion = new CompletableFuture<>();
 
     private final PeerSelector selector;
+    private final PeerQuarantine quarantine;
     private final Map<Integer, LeecherHandler> sessions = new HashMap<>();
     private final Map<InetSocketAddress, PeerSelector.Candidate> known = new HashMap<>();
     private final ConcurrentHashMap<Integer, PeerSelector.Candidate> roster = new ConcurrentHashMap<>();
@@ -92,10 +95,16 @@ public final class SwarmDownloader implements AutoCloseable {
 
     public SwarmDownloader(Settings settings, ChunkInventory inventory, ChunkAssembler assembler,
                            PeerSelector selector) {
+        this(settings, inventory, assembler, selector, PeerQuarantine.none());
+    }
+
+    public SwarmDownloader(Settings settings, ChunkInventory inventory, ChunkAssembler assembler,
+                           PeerSelector selector, PeerQuarantine quarantine) {
         this.settings = Objects.requireNonNull(settings, "settings");
         this.inventory = Objects.requireNonNull(inventory, "inventory");
         this.assembler = Objects.requireNonNull(assembler, "assembler");
         this.selector = selector;
+        this.quarantine = quarantine == null ? PeerQuarantine.none() : quarantine;
         this.availability = new ChunkAvailability(inventory.chunkCount(), settings.tieBreakSeed());
         SwarmScheduler.SourcePreference preference = selector == null
                 ? SwarmScheduler.SourcePreference.NONE
@@ -137,12 +146,12 @@ public final class SwarmDownloader implements AutoCloseable {
      */
     public synchronized CompletableFuture<Result> startPreferring(List<PeerSelector.Candidate> candidates) {
         Objects.requireNonNull(candidates, "candidates");
+        for (PeerSelector.Candidate candidate : candidates) {
+            known.put(candidate.address(), candidate);
+        }
         List<PeerSelector.Candidate> order = selector == null
                 ? List.copyOf(candidates)
                 : selector.rank(candidates);
-        for (PeerSelector.Candidate candidate : order) {
-            known.put(candidate.address(), candidate);
-        }
         List<InetSocketAddress> addresses = new ArrayList<>(order.size());
         for (PeerSelector.Candidate candidate : order) {
             addresses.add(candidate.address());
@@ -162,14 +171,23 @@ public final class SwarmDownloader implements AutoCloseable {
             return completion;
         }
         if (candidates.isEmpty()) {
-            completion.completeExceptionally(new IOException("no candidate peers to fetch from"));
+            String why = known.isEmpty()
+                    ? "no candidate peers to fetch from"
+                    : "no eligible peers to fetch from";
+            completion.completeExceptionally(new IOException(why));
             return completion;
         }
 
-        List<InetSocketAddress> toDial = candidates.size() <= settings.maxPeers()
-                ? List.copyOf(candidates)
-                : List.copyOf(candidates.subList(0, settings.maxPeers()));
-        spares.addAll(candidates.subList(toDial.size(), candidates.size()));
+        List<InetSocketAddress> eligible = eligibleAddresses(candidates);
+        if (eligible.isEmpty()) {
+            completion.completeExceptionally(new IOException("no eligible peers to fetch from"));
+            return completion;
+        }
+
+        List<InetSocketAddress> toDial = eligible.size() <= settings.maxPeers()
+                ? List.copyOf(eligible)
+                : List.copyOf(eligible.subList(0, settings.maxPeers()));
+        spares.addAll(eligible.subList(toDial.size(), eligible.size()));
 
         lastProgress = scheduler.progress();
         long period = Math.max(1, settings.stallTimeout().toMillis());
@@ -198,6 +216,9 @@ public final class SwarmDownloader implements AutoCloseable {
         for (PeerSelector.Candidate candidate : order) {
             known.put(candidate.address(), candidate);
             if (dialled.contains(candidate.address())) {
+                continue;
+            }
+            if (quarantine.isQuarantined(candidate.peerId())) {
                 continue;
             }
             if (sessions.size() < settings.maxPeers()) {
@@ -357,6 +378,7 @@ public final class SwarmDownloader implements AutoCloseable {
         availability.leave(sessionId);
         if (failure != null) {
             sessionsLost++;
+            noteProtocolFailure(seeder, failure);
             log.debug("swarm session {} to {} ended: {}", sessionId, seeder, failure.toString());
         }
         if (completion.isDone()) {
@@ -367,8 +389,9 @@ public final class SwarmDownloader implements AutoCloseable {
         if (finishIfDone()) {
             return;
         }
-        if (!spares.isEmpty()) {
-            dial(spares.pollFirst());
+        InetSocketAddress spare = nextEligibleSpare();
+        if (spare != null) {
+            dial(spare);
             return;
         }
         if (sessions.isEmpty()) {
@@ -454,6 +477,41 @@ public final class SwarmDownloader implements AutoCloseable {
         return Double.NaN;
     }
 
+    private List<InetSocketAddress> eligibleAddresses(List<InetSocketAddress> candidates) {
+        List<InetSocketAddress> eligible = new ArrayList<>(candidates.size());
+        for (InetSocketAddress address : candidates) {
+            if (eligible(address)) {
+                eligible.add(address);
+            }
+        }
+        return eligible;
+    }
+
+    private boolean eligible(InetSocketAddress address) {
+        PeerSelector.Candidate candidate = known.get(address);
+        return candidate == null || !quarantine.isQuarantined(candidate.peerId());
+    }
+
+    private InetSocketAddress nextEligibleSpare() {
+        while (!spares.isEmpty()) {
+            InetSocketAddress address = spares.pollFirst();
+            if (eligible(address)) {
+                return address;
+            }
+        }
+        return null;
+    }
+
+    private void noteProtocolFailure(InetSocketAddress seeder, Throwable failure) {
+        if (!(failure instanceof ProtocolViolationException)) {
+            return;
+        }
+        PeerSelector.Candidate candidate = known.get(seeder);
+        if (candidate != null) {
+            quarantine.noteProtocolViolation(candidate.peerId());
+        }
+    }
+
     /** One session's view of the swarm: it can only speak for itself. */
     private final class Events implements SessionEvents {
 
@@ -490,6 +548,18 @@ public final class SwarmDownloader implements AutoCloseable {
         public void blockFailed() {
             PeerSelector.Candidate candidate = roster.get(sessionId);
             if (selector != null && candidate != null) {
+                selector.metricsFor(candidate.peerId()).blockFailed();
+            }
+        }
+
+        @Override
+        public void hashMismatch() {
+            PeerSelector.Candidate candidate = roster.get(sessionId);
+            if (candidate == null) {
+                return;
+            }
+            quarantine.noteHashMismatch(candidate.peerId());
+            if (selector != null) {
                 selector.metricsFor(candidate.peerId()).blockFailed();
             }
         }
