@@ -2,7 +2,7 @@
 
 Task IDs are the blueprint's backlog IDs (§16). `./mvnw verify` is the gate for every step.
 
-Phases 0–8 are complete. **Phase 9 (security hardening) is next.**
+Phases 0–9 are complete. **Phase 10 (experiment harness) is next.**
 
 ## What exists
 
@@ -10,11 +10,11 @@ Phases 0–8 are complete. **Phase 9 (security hardening) is next.**
 | --- | --- |
 | `common/` | `AssetId`, `PeerId`, `Hex`, `Defaults` (4 MiB chunk, 256 KiB block, 45 s TTL, limit 20) |
 | `protocol/` | Frame codecs + golden vectors for all ten message types, streaming BLOCK decoder, pinned BITFIELD bit order |
-| `manifest-tool/` | Chunk → `ChunkStore` + SQLite `ChunkIndex` → unsigned manifest → Ed25519 sign → verify → rebuild → resume; CLI `gen-key` / `sign` / `verify` |
+| `manifest-tool/` | Chunk → `ChunkStore` + SQLite `ChunkIndex` → unsigned manifest → Ed25519 sign → verify → freshness/sequence → rebuild → resume; CLI `gen-key` / `sign` / `verify` |
 | `origin-fixture/` | `GET /files/{name}` 200/206/404, `GET /manifests/{name}.json` copy only, served-byte ledger plus a 1 s peak per run |
-| `peer-agent/` | Origin, swarm, LAPS, and `HybridDownloader`: cache → peers → same-site EDGE → limited origin |
-| `tracker-service/` | Announce with bearer peer token, Redis `HEXPIRE` 45 s, ranked candidates, `POST /api/v1/auth/peer-token` |
-| `benchmark-runner/` | `B0Runner` and `SwarmRunner` with B0–B4 and B6 configs, reading `research/configs/*.yaml` |
+| `peer-agent/` | Origin, swarm, LAPS, `HybridDownloader`, and `PeerQuarantine` eligibility |
+| `tracker-service/` | Announce with bearer peer token, Redis `HEXPIRE` 45 s, ranked candidates, `POST /api/v1/auth/peer-token`, announce rate limit |
+| `benchmark-runner/` | `B0Runner`, `SwarmRunner`, and `SecurityOverheadRunner` with B0–B4, B6, and B9 configs |
 
 ## Phase 4 — Two-peer Netty session (`peer-agent/`) — complete
 
@@ -100,21 +100,31 @@ All four are done. `ChunkStore.hasVerified` is the lookup before network; `Cache
 
 EDGE is the same binary. Role is not on the tracker wire. Origin stays chunk-granular. B1–B3 configs were not edited.
 
-## Carried forward (not blocking Phase 9)
+## Phase 9 — Security hardening — complete
+
+| Step | Job | Outcome |
+| --- | --- | --- |
+| P9-01 | Manifest freshness/sequence | `ReleaseFreshness` after verify; expired and rollback are explicit `StaleReleaseException`s |
+| P9-02 | Peer reputation/quarantine | Hash/protocol failures drop eligibility; SHA-256 still runs on every assembled chunk |
+| P9-03 | Secret/log audit | `SecretLogAuditTest` plus [`docs/SECURITY.md`](SECURITY.md) |
+| P9-04 | Security overhead | B9 YAML + runner records hash/sign/verify/HMAC nanos and claims none of them |
+
+Announce rate limiting (`rate:{peerId}:announce`) landed here as the carried-forward abuse control. A burst is HTTP 429; other peers still announce.
+
+## Carried forward (not blocking Phase 10)
 
 These are blueprint items whose phase is closed but which later phases assume.
 
 | Item | Blueprint ref | Where it lands |
 | --- | --- | --- |
 | Actuator health + Prometheus on the tracker | §10.1 | Phase 10 observability |
-| Announce rate limiting (`rate:{peerId}:announce`) | §10.2, §11.2 | Phase 9 abuse controls |
 | Immutable raw run folders under `research/raw/` | §13.3 | P10-03 |
 | `docs/architecture.md`, `docs/experiment-method.md` | §14 | Before the paper draft |
 
 ## Later (do not pull forward)
 
-- Phase 9 security hardening (sequence/rollback, reputation, log audit) — **next**
-- Phase 10 experiment harness; Phase 11 FastCDC; Phase 12 release
+- Phase 10 experiment harness — **next**
+- Phase 11 FastCDC; Phase 12 release
 - No invented Mbps or offload %
 
 ## Working rule
