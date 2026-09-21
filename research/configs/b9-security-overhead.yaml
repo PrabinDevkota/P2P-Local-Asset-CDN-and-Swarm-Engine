@@ -1,0 +1,12 @@
+# Baseline B9: security-operation cost, measured separately from the scheduler study.
+# Nothing here is a target or a claim. A run records hash / sign / verify / HMAC
+# sample times; it does not assert that any of them is fast.
+scenarioId: b9-security-overhead
+baseline: B9
+description: Repeat SHA-256, Ed25519 sign/verify, and HMAC-SHA256 on a fixed payload.
+
+run:
+  repetitions: 25
+  seed: 20260921
+  # 256 KiB is one default block, small enough for a unit test and large enough to hash.
+  payloadBytes: 262144
