@@ -1,6 +1,8 @@
 package com.prabin.tracker.api;
 
 import com.prabin.tracker.auth.PeerTokens;
+import com.prabin.tracker.rate.AnnounceRateLimiter;
+import com.prabin.tracker.store.PeerDirectory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -24,5 +26,10 @@ public final class TrackerExceptionHandler {
     @ExceptionHandler(PeerTokens.InvalidTokenException.class)
     public ResponseEntity<Map<String, String>> unauthorized(PeerTokens.InvalidTokenException ex) {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", ex.getMessage()));
+    }
+
+    @ExceptionHandler(AnnounceRateLimiter.LimitedException.class)
+    public ResponseEntity<Map<String, String>> tooManyRequests(AnnounceRateLimiter.LimitedException ex) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(Map.of("error", ex.getMessage()));
     }
 }
