@@ -6,6 +6,7 @@ import com.prabin.swarmedge.common.id.Hex;
 import com.prabin.swarmedge.common.id.PeerId;
 import com.prabin.tracker.auth.PeerTokens;
 import com.prabin.tracker.rank.LocalityRanker;
+import com.prabin.tracker.rate.AnnounceRateLimiter;
 import com.prabin.tracker.store.PeerDirectory;
 import com.prabin.tracker.store.PeerRecord;
 import jakarta.servlet.http.HttpServletRequest;
@@ -30,10 +31,12 @@ public final class PeerController {
 
     private final PeerDirectory directory;
     private final PeerTokens tokens;
+    private final AnnounceRateLimiter announceLimiter;
 
-    public PeerController(PeerDirectory directory, PeerTokens tokens) {
+    public PeerController(PeerDirectory directory, PeerTokens tokens, AnnounceRateLimiter announceLimiter) {
         this.directory = Objects.requireNonNull(directory, "directory");
         this.tokens = Objects.requireNonNull(tokens, "tokens");
+        this.announceLimiter = Objects.requireNonNull(announceLimiter, "announceLimiter");
     }
 
     @PostMapping("/api/v1/peers/announce")
@@ -42,6 +45,9 @@ public final class PeerController {
         AnnounceRequest.Validated v = body.validate();
         // Identity and locality come from the token, never from the body alone.
         tokens.verifyFor(bearerToken(request), v.peerId(), v.siteId(), v.networkGroupId());
+        if (!announceLimiter.tryAcquire(v.peerId())) {
+            throw new AnnounceRateLimiter.LimitedException(v.peerId());
+        }
         String ip = observedIp(request);
         directory.save(
                 v.assetId(),
