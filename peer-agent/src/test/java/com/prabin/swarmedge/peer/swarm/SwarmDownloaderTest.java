@@ -197,6 +197,37 @@ class SwarmDownloaderTest {
     }
 
     @Test
+    void aHeldStallDoesNotFailWhenTheLastPeerDies() throws Exception {
+        // P8-02: origin can still finish. Dying peers must not abort a swarm that is
+        // waiting on a foreign source.
+        SeederServer only = server(seederStore("only-hold", allChunks()), BlockSender.Mode.BUFFERED);
+        Leecher leecher = leecher("leecher-hold");
+        SwarmDownloader swarm = swarm(leecher, 1);
+        CompletableFuture<SwarmDownloader.Result> asset = swarm.start(List.of(only.address()));
+        swarm.holdStall(true);
+        only.close();
+
+        for (int i = 0; i < 50 && swarm.connectedPeers() > 0; i++) {
+            Thread.sleep(20);
+        }
+        assertThat(asset.isDone()).isFalse();
+
+        for (int chunkIndex = 0; chunkIndex < chunkCount(); chunkIndex++) {
+            if (leecher.inventory().has(chunkIndex)) {
+                continue;
+            }
+            ChunkEntry chunk = manifest.chunks().get(chunkIndex);
+            leecher.store().putVerified(chunk.sha256(), bytesOf(chunk));
+            leecher.inventory().markStored(chunkIndex);
+            swarm.acceptForeignChunk(chunkIndex);
+        }
+
+        await(asset);
+        assertThat(leecher.inventory().complete()).isTrue();
+        assertThatRebuiltAssetMatches(leecher);
+    }
+
+    @Test
     void aSpareCandidateReplacesAPeerThatRefusesUs() throws Exception {
         ChunkStore rudeStore = seederStore("rude", allChunks());
         SeederServer refuses = new SeederServer(new SeederServer.Config(0, assetId,
