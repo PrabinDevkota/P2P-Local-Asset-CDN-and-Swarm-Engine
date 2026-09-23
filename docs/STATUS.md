@@ -46,7 +46,7 @@ Raw run folders (`research/raw/<runId>/` with `config.yaml`, `git_commit.txt`, `
 
 Announce now requires `Authorization: Bearer <token>`. A token for another peer, or one claiming a locality it was not issued for, is rejected with 401. Tokens are a dev/research stand-in for mTLS: they gate the control plane and never authorize content.
 
-Still open against blueprint §10: Actuator health / Prometheus, `asset:{assetId}:manifest-meta`, and the `capabilities` / `uploadBudget` announce fields. Announce rate limiting is Phase 9.
+Still open against blueprint §10: Actuator health / Prometheus. Announce carries `capabilities`, `uploadBudget`, and `uploadLoad`. `GET/PUT /api/v1/assets/{assetId}/manifest` stores `asset:{assetId}:manifest-meta` as an index, not a trust root.
 
 Tracker never stores file bytes and is not a trust root.
 
@@ -71,7 +71,7 @@ Found and fixed on review of this phase:
 - Nothing reaped a connection that stalled below ACTIVE. A seeder could be tied up by sockets that said nothing, and a leecher waited forever on a seeder that accepted and went quiet, because the block timeout only starts once blocks are being requested. Both sides now have a handshake deadline.
 - The seeder answered PING and accepted HAVE, PONG, and CANCEL before the handshake. An unauthenticated socket should not be useful for anything, so those are refused now.
 
-Not covered in this phase: the token in HELLO is carried but not verified (`PeerAuthPolicy` is the seam for the hardening phase), and block-level resume inside a partly received chunk restarts that chunk (chunk-level resume works). A hash mismatch on a single-peer session still ends it; a swarm rebuilds the chunk and asks someone else.
+Not covered in this phase: block-level resume inside a partly received chunk restarts that chunk (chunk-level resume works). HELLO token verification is `HmacPeerAuth`; lab seeders still use `PeerAuthPolicy.ACCEPT_ANY_TOKEN`. A hash mismatch on a single-peer session still ends it; a swarm rebuilds the chunk and asks someone else.
 
 ## Phase 5 — Basic swarm (B1) — done
 
@@ -114,7 +114,7 @@ The endgame exists for the tail, not the average. Near the end there is less wor
 
 LAPS reorders sources and grants nothing. Every byte from the best-scoring peer is still hashed against the signed manifest, and no score exempts anyone.
 
-Not covered in this phase: the agent has no tracker announce loop, so a B2 or B3 run gets its locality labels from the scenario rather than from discovery — the source policy is exercised, discovery is not. The `capabilities` / `uploadBudget` announce fields are still absent from the tracker (§10.1), so `advertisedUploadLoad` has no wire path yet. The window stays fixed at 8 outstanding requests; §8.3's "shrink or expand once the baseline is stable" is not implemented.
+`TrackerClient` announces and discovers. `AnnounceLoop` refreshes before the 45 s TTL. B2/B3 runners still take locality from the scenario so the scheduler study does not depend on a live tracker. `capabilities`, `uploadBudget` (bytes/s), and `uploadLoad` (0..1) ride on announce and come back on the candidate list; `uploadLoad` is what `advertisedUploadLoad` reads. `PipelineWindow` stays at 8 until 16 clean blocks, then may grow, and halves on failure. `SwarmRunner` does not enable it, so B1–B3 stay on a fixed window of 8.
 
 Live sessions now record into `PeerMetrics`: a block that arrives updates goodput and RTT, a timeout or refusal updates health. The scheduler prefers a better-scoring connected peer while that peer still has room in its pipeline, so B3 can differ from B2 during a single transfer rather than only on the next dial. An idle better peer (zero leases) is not assumed to be about to ask, or a worse session would wait on a handshake that has not happened yet.
 
@@ -152,7 +152,7 @@ EDGE is process policy, not a new protocol role and not a tracker announce field
 - [x] P9-04 Security overhead: `research/configs/b9-security-overhead.yaml` plus `SecurityOverheadRunner` records hash / sign / verify / HMAC sample times and asserts none of them as an SLO.
 - [x] Announce rate limit: `rate:{peerId}:announce`; a burst is 429 and does not block another peer.
 
-Highest-seen sequence is per process (a restart forgets it). HELLO still carries an opaque token; `PeerAuthPolicy` remains the mTLS/HMAC seam. Actuator/Prometheus stay Phase 10.
+Highest-seen sequence is kept in a `SequenceLedger` when the caller passes one (`manifest-tool verify --seen`). Without that file a restart still forgets it. HELLO can be checked with `HmacPeerAuth` against the same HMAC the tracker issues; lab transfers still accept any token. Actuator/Prometheus stay Phase 10.
 
 ## Not started
 
