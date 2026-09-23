@@ -24,7 +24,7 @@ public final class ManifestCli {
               sign --file <path> --product <id> --version <ver> --signing-key-id <id> \\
                    --private-key <pem> --store <dir> --out <manifest.json> \\
                    [--chunk-size <bytes>] [--sequence <n>] [--expires-days <n>]
-              verify --manifest <json> --public-key <pem>
+              verify --manifest <json> --public-key <pem> [--seen <sequence-ledger>]
             """;
 
     private ManifestCli() {
@@ -104,7 +104,10 @@ public final class ManifestCli {
     private static int verify(Map<String, String> flags, PrintStream out) throws Exception {
         ReleaseManifest manifest = ManifestJson.parse(Files.readString(Path.of(require(flags, "manifest"))));
         ManifestVerifier.verify(manifest, Ed25519Keys.readPublicKey(Path.of(require(flags, "public-key"))));
-        new ReleaseFreshness(Clock.systemUTC()).accept(manifest);
+        SequenceLedger ledger = flags.containsKey("seen")
+                ? SequenceLedger.open(Path.of(flags.get("seen")))
+                : null;
+        new ReleaseFreshness(Clock.systemUTC(), ReleaseFreshness.RollbackPolicy.REJECT, ledger).accept(manifest);
         out.println(CanonicalManifest.assetId(manifest).toHex());
         return 0;
     }
