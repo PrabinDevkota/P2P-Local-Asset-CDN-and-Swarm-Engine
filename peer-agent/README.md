@@ -92,4 +92,6 @@ EDGE is process policy (`SeederHandler.Settings.edge`, `PeerSelector.Candidate.e
 
 `PeerQuarantine` counts hash mismatches and protocol violations. Crossing the strike threshold makes that `PeerId` ineligible to dial for a cooldown. LAPS may still *score* a connected session; it cannot make a quarantined peer eligible, and it cannot skip SHA-256 on a chunk that does arrive.
 
-Not wired yet: `SwarmNode` still has no CLI to point a seeder at a manifest, and the token in HELLO is carried but not verified (`PeerAuthPolicy` is where that lands).
+`HmacPeerAuth` checks the HELLO token against the tracker HMAC secret. `ACCEPT_ANY_TOKEN` remains the lab default. `TrackerClient` / `AnnounceLoop` register this peer and read candidates, including `uploadLoad`. `PipelineWindow` may leave the fixed window of 8 after a stable run of clean blocks; pass `LeecherHandler.Settings.adaptive()` to turn that on. B1–B3 runners do not.
+
+Not wired yet: `SwarmNode` still has no CLI to point a seeder at a manifest.
