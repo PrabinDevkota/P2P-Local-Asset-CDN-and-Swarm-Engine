@@ -77,7 +77,17 @@ public final class RedisPeerDirectory implements PeerDirectory {
         return value.getBytes(StandardCharsets.US_ASCII);
     }
 
-    record Stored(String ip, int port, String siteId, String networkGroupId, int bitCount, String bits) {
+    record Stored(
+            String ip,
+            int port,
+            String siteId,
+            String networkGroupId,
+            int bitCount,
+            String bits,
+            Integer capabilities,
+            Long uploadBudget,
+            Double uploadLoad
+    ) {
         static Stored from(PeerRecord peer) {
             return new Stored(
                     peer.ip(),
@@ -85,12 +95,28 @@ public final class RedisPeerDirectory implements PeerDirectory {
                     peer.siteId(),
                     peer.networkGroupId(),
                     peer.bitCount(),
-                    Hex.toLowerHex(peer.bits()));
+                    Hex.toLowerHex(peer.bits()),
+                    peer.capabilities(),
+                    peer.uploadBudgetBytesPerSecond(),
+                    peer.uploadLoad().isPresent() ? peer.uploadLoad().getAsDouble() : null);
         }
 
         PeerRecord toRecord(PeerId peerId) {
             byte[] decoded = bits == null || bits.isBlank() ? new byte[0] : Hex.fromHex(bits);
-            return new PeerRecord(peerId, ip, port, siteId, networkGroupId, bitCount, decoded);
+            java.util.OptionalDouble load = uploadLoad == null
+                    ? java.util.OptionalDouble.empty()
+                    : java.util.OptionalDouble.of(uploadLoad);
+            return new PeerRecord(
+                    peerId,
+                    ip,
+                    port,
+                    siteId,
+                    networkGroupId,
+                    bitCount,
+                    decoded,
+                    capabilities == null ? 0 : capabilities,
+                    uploadBudget == null ? 0L : uploadBudget,
+                    load);
         }
     }
 }
