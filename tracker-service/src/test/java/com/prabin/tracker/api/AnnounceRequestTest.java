@@ -21,6 +21,29 @@ class AnnounceRequestTest {
         assertThat(v.networkGroupId()).isEqualTo("ng-1");
         assertThat(v.bitCount()).isEqualTo(8);
         assertThat(v.bits()).containsExactly((byte) 0x80);
+        assertThat(v.capabilities()).isZero();
+        assertThat(v.uploadBudgetBytesPerSecond()).isZero();
+        assertThat(v.uploadLoad()).isEmpty();
+    }
+
+    @Test
+    void acceptsCapabilitiesBudgetAndLoad() {
+        AnnounceRequest.Validated v = new AnnounceRequest(
+                ASSET, PEER, 9091, "site-a", "ng-1", new AnnounceRequest.Bitfield(0, ""),
+                4, 1_000_000L, 0.5).validate();
+
+        assertThat(v.capabilities()).isEqualTo(4);
+        assertThat(v.uploadBudgetBytesPerSecond()).isEqualTo(1_000_000L);
+        assertThat(v.uploadLoad()).hasValue(0.5);
+    }
+
+    @Test
+    void rejectsALoadOutsideZeroToOne() {
+        assertThatThrownBy(() -> new AnnounceRequest(
+                ASSET, PEER, 9091, "site-a", "ng-1", new AnnounceRequest.Bitfield(0, ""),
+                0, 0L, 1.5).validate())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("uploadLoad");
     }
 
     @Test
