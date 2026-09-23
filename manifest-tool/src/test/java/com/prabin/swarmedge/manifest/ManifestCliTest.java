@@ -105,6 +105,27 @@ class ManifestCliTest {
     }
 
     @Test
+    void verifyWithALedgerRejectsALaterRollback() throws Exception {
+        Path keys = tempDir.resolve("keys");
+        assertThat(run("gen-key", "--out-dir", keys.toString())).isZero();
+        Path seen = tempDir.resolve("seen.txt");
+        Path higher = writeSigned(keys, 8, "higher.json");
+        Path lower = writeSigned(keys, 2, "lower.json");
+
+        assertThat(run("verify",
+                "--manifest", higher.toString(),
+                "--public-key", keys.resolve("public.pem").toString(),
+                "--seen", seen.toString())).isZero();
+
+        Capture rollback = capture("verify",
+                "--manifest", lower.toString(),
+                "--public-key", keys.resolve("public.pem").toString(),
+                "--seen", seen.toString());
+        assertThat(rollback.code()).isEqualTo(1);
+        assertThat(rollback.err()).contains("behind highest-seen");
+    }
+
+    @Test
     void unknownCommandPrintsUsage() {
         Capture capture = capture("not-a-command");
         assertThat(capture.code()).isEqualTo(2);
@@ -113,6 +134,19 @@ class ManifestCliTest {
 
     private int run(String... args) {
         return capture(args).code();
+    }
+
+    private Path writeSigned(Path keys, long sequence, String name) throws Exception {
+        Path file = tempDir.resolve(name + ".bin");
+        Files.write(file, new byte[] {0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
+        List<ChunkEntry> chunks = new FileChunker(4).chunk(file);
+        ReleaseManifest signed = ManifestSigner.sign(
+                ReleaseManifestFactory.unsigned("game-x", "1.4.0", file, 4, chunks,
+                        "2026-08-12T00:00:00Z", "2027-12-31T00:00:00Z", sequence, "release-key-2026-01"),
+                Ed25519Keys.readPrivateKey(keys.resolve("private.pem")));
+        Path manifestPath = tempDir.resolve(name);
+        Files.writeString(manifestPath, ManifestJson.toJson(signed));
+        return manifestPath;
     }
 
     private Capture capture(String... args) {
