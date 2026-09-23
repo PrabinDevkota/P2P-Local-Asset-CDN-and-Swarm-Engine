@@ -18,8 +18,25 @@ public record AnnounceRequest(
         int port,
         String siteId,
         String networkGroupId,
-        Bitfield bitfield
+        Bitfield bitfield,
+        Integer capabilities,
+        Long uploadBudget,
+        Double uploadLoad
 ) {
+
+    public AnnounceRequest(String assetId, String peerId, int port, String siteId, String networkGroupId,
+                           Bitfield bitfield) {
+        this(assetId, peerId, port, siteId, networkGroupId, bitfield, null, null, null);
+    }
+
+    public AnnounceRequest {
+        if (capabilities == null) {
+            capabilities = 0;
+        }
+        if (uploadBudget == null) {
+            uploadBudget = 0L;
+        }
+    }
 
     public static final int MAX_LABEL_LENGTH = 64;
     public static final int MAX_BIT_COUNT = 1_048_576;
@@ -39,12 +56,27 @@ public record AnnounceRequest(
         if (bitfield == null) {
             throw new IllegalArgumentException("bitfield is required");
         }
+        int caps = capabilities;
+        long budget = uploadBudget;
+        if (caps < 0) {
+            throw new IllegalArgumentException("capabilities must be non-negative");
+        }
+        if (budget < 0) {
+            throw new IllegalArgumentException("uploadBudget must be non-negative");
+        }
+        java.util.OptionalDouble load = java.util.OptionalDouble.empty();
+        if (uploadLoad != null) {
+            if (uploadLoad < 0 || uploadLoad > 1 || uploadLoad.isNaN()) {
+                throw new IllegalArgumentException("uploadLoad must be in 0..1");
+            }
+            load = java.util.OptionalDouble.of(uploadLoad);
+        }
         int bitCount = bitfield.bitCount();
         if (bitCount < 0 || bitCount > MAX_BIT_COUNT) {
             throw new IllegalArgumentException("bitCount must be 0-" + MAX_BIT_COUNT);
         }
         byte[] bits = parseBits(bitfield.bits(), bitCount);
-        return new Validated(asset, peer, port, site, group, bitCount, bits);
+        return new Validated(asset, peer, port, site, group, bitCount, bits, caps, budget, load);
     }
 
     public record Validated(
@@ -54,7 +86,10 @@ public record AnnounceRequest(
             String siteId,
             String networkGroupId,
             int bitCount,
-            byte[] bits
+            byte[] bits,
+            int capabilities,
+            long uploadBudgetBytesPerSecond,
+            java.util.OptionalDouble uploadLoad
     ) {
         public Validated {
             Objects.requireNonNull(assetId, "assetId");
@@ -62,6 +97,7 @@ public record AnnounceRequest(
             Objects.requireNonNull(siteId, "siteId");
             Objects.requireNonNull(networkGroupId, "networkGroupId");
             Objects.requireNonNull(bits, "bits");
+            Objects.requireNonNull(uploadLoad, "uploadLoad");
         }
     }
 
