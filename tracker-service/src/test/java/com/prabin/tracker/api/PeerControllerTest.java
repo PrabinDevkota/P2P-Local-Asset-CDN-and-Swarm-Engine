@@ -128,6 +128,26 @@ class PeerControllerTest {
                 .andExpect(jsonPath("$.peers[2].peerId").value(REMOTE));
     }
 
+    @Test
+    void announceKeepsCapabilitiesBudgetAndLoad() throws Exception {
+        postPeer(SAME_SITE, "site-a", "ng-2");
+        mvc.perform(post("/api/v1/peers/announce")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header(HttpHeaders.AUTHORIZATION, bearer(SELF, "site-a", "ng-1"))
+                        .content("""
+                                {"assetId":"%s","peerId":"%s","port":9091,"siteId":"site-a","networkGroupId":"ng-1",\
+                                "bitfield":{"bitCount":0,"bits":""},"capabilities":4,"uploadBudget":250000,"uploadLoad":0.4}
+                                """.formatted(ASSET, SELF)))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/api/v1/assets/{assetId}/peers", ASSET).param("peerId", SAME_SITE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.peers[0].peerId").value(SELF))
+                .andExpect(jsonPath("$.peers[0].capabilities").value(4))
+                .andExpect(jsonPath("$.peers[0].uploadBudget").value(250000))
+                .andExpect(jsonPath("$.peers[0].uploadLoad").value(0.4));
+    }
+
     private void postPeer(String peerId, String site, String group) throws Exception {
         mvc.perform(post("/api/v1/peers/announce")
                         .contentType(MediaType.APPLICATION_JSON)
