@@ -34,8 +34,8 @@ public final class RequestTracker {
 
     private static final int MIN_RETIRED_MEMORY = 64;
 
-    private final int maxOutstanding;
-    private final long maxOutstandingBytes;
+    private int maxOutstanding;
+    private long maxOutstandingBytes;
     private final long timeoutNanos;
     private final LongSupplier nanoClock;
     private final int retiredMemory;
@@ -62,6 +62,21 @@ public final class RequestTracker {
         this.timeoutNanos = timeout.toNanos();
         this.nanoClock = Objects.requireNonNull(nanoClock, "nanoClock");
         this.retiredMemory = Math.max(MIN_RETIRED_MEMORY, maxOutstanding * 16);
+    }
+
+    /**
+     * Change how many new requests may be issued. In-flight requests are left alone,
+     * so a shrink waits until they complete before the smaller cap binds.
+     */
+    public void setLimits(int maxOutstanding, long maxOutstandingBytes) {
+        if (maxOutstanding <= 0) {
+            throw new IllegalArgumentException("maxOutstanding must be positive");
+        }
+        if (maxOutstandingBytes <= 0) {
+            throw new IllegalArgumentException("maxOutstandingBytes must be positive");
+        }
+        this.maxOutstanding = maxOutstanding;
+        this.maxOutstandingBytes = maxOutstandingBytes;
     }
 
     public int outstandingCount() {
