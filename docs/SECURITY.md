@@ -27,6 +27,7 @@ Do not commit `.env`, PEM private keys, or tracker secrets. Report a suspected l
 
 ## What this phase does not claim
 
-- HELLO still carries an opaque token; `PeerAuthPolicy` is the seam for verifying it. Production path is mTLS.
+- HELLO is checked when the seeder uses `HmacPeerAuth`. Lab seeders still use `ACCEPT_ANY_TOKEN`. Production path remains mTLS.
+- Highest-seen sequence persists only when a `SequenceLedger` file is supplied.
 - Security-operation timings (hash / sign / verify / HMAC) are measured by baseline B9 and are not SLOs.
 - Highest-seen sequence is per process. A restart forgets it.
