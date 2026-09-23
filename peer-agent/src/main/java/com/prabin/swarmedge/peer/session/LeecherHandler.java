@@ -69,6 +69,7 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
     private final SessionEvents events;
     private final PeerSession session;
     private final RequestTracker tracker;
+    private final PipelineWindow window;
     private final CompletableFuture<Result> completion = new CompletableFuture<>();
     private final Map<BlockPlan.Block, Integer> attempts = new HashMap<>();
 
@@ -104,6 +105,7 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
         this.settings = Objects.requireNonNull(settings, "settings");
         this.sources = Objects.requireNonNull(sources, "sources");
         this.events = Objects.requireNonNull(events, "events");
+        this.window = settings.window();
         this.session = new PeerSession(PeerSession.Role.LEECHER, assetId, localPeerId,
                 inventory.chunkCount(), settings.blockSize());
         this.tracker = new RequestTracker(settings.maxOutstanding(),
@@ -317,6 +319,7 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
         BlockPlan.Block block = blockOf(request);
         if (countAttempt(ctx, block, "refused")) {
             events.blockFailed();
+            noteWindow(false);
             plan.requeue(block);
             requestMore(ctx);
         }
@@ -405,6 +408,7 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
         bytesReceived += end.blockLength();
         events.blockCompleted(end.blockLength(),
                 Duration.ofNanos(Math.max(0L, System.nanoTime() - finished.issuedAtNanos())));
+        noteWindow(true);
         // These bytes are ours, so any second peer fetching the same block can stop.
         plan.completed(new BlockPlan.Block(
                 finished.chunkIndex(), finished.blockOffset(), end.blockLength()));
@@ -468,6 +472,7 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
                 return;
             }
             events.blockFailed();
+            noteWindow(false);
             plan.requeue(block);
         }
         requestMore(ctx);
@@ -502,6 +507,14 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
         }
         completion.completeExceptionally(cause);
         ctx.close();
+    }
+
+    private void noteWindow(boolean success) {
+        if (window == null) {
+            return;
+        }
+        int next = success ? window.onBlockCompleted() : window.onBlockFailed();
+        tracker.setLimits(next, (long) next * settings.blockSize());
     }
 
     @Override
@@ -600,9 +613,15 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
      * @param blockTimeout       how long a block may take before it is cancelled and retried
      * @param maxAttemptsPerBlock attempts before the session gives up on the asset
      * @param handshakeTimeout   how long the seeder has to reach ACTIVE before we give up
+     * @param window             adaptive outstanding cap, or null to stay at {@code maxOutstanding}
      */
     public record Settings(int blockSize, int maxOutstanding, Duration blockTimeout, int maxAttemptsPerBlock,
-                           Duration handshakeTimeout) {
+                           Duration handshakeTimeout, PipelineWindow window) {
+
+        public Settings(int blockSize, int maxOutstanding, Duration blockTimeout, int maxAttemptsPerBlock,
+                        Duration handshakeTimeout) {
+            this(blockSize, maxOutstanding, blockTimeout, maxAttemptsPerBlock, handshakeTimeout, null);
+        }
 
         public Settings {
             if (blockSize <= 0) {
@@ -624,6 +643,12 @@ public final class LeecherHandler extends SimpleChannelInboundHandler<Object> {
         public static Settings defaults() {
             return new Settings(Defaults.BLOCK_SIZE_BYTES, Defaults.OUTSTANDING_REQUESTS_PER_PEER,
                     Duration.ofSeconds(30), 3, Duration.ofSeconds(10));
+        }
+
+        /** Same numbers as {@link #defaults()}, with a window that may move after the baseline. */
+        public static Settings adaptive() {
+            return new Settings(Defaults.BLOCK_SIZE_BYTES, Defaults.OUTSTANDING_REQUESTS_PER_PEER,
+                    Duration.ofSeconds(30), 3, Duration.ofSeconds(10), new PipelineWindow());
         }
     }
 
