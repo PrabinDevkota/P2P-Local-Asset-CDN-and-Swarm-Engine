@@ -126,6 +126,22 @@ class ReleaseFreshnessTest {
                 .isInstanceOf(StaleReleaseException.class);
     }
 
+    @Test
+    void aRestartStillRejectsARollback() throws Exception {
+        Path file = tempDir.resolve("seen.txt");
+        SequenceLedger ledger = SequenceLedger.open(file);
+        new ReleaseFreshness(CLOCK, ReleaseFreshness.RollbackPolicy.REJECT, ledger)
+                .accept(signed("game-x", 17, "2026-10-12T00:00:00Z"));
+
+        ReleaseFreshness restarted = new ReleaseFreshness(
+                CLOCK, ReleaseFreshness.RollbackPolicy.REJECT, SequenceLedger.open(file));
+
+        assertThat(restarted.highestSeen("game-x")).hasValue(17);
+        assertThatThrownBy(() -> restarted.accept(signed("game-x", 16, "2026-10-12T00:00:00Z")))
+                .isInstanceOf(StaleReleaseException.class)
+                .hasMessageContaining("behind highest-seen 17");
+    }
+
     private StaleReleaseException caught(ReleaseFreshness freshness, ReleaseManifest manifest) {
         try {
             freshness.accept(manifest);
