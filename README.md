@@ -128,11 +128,11 @@ Phone book only. Requires Redis ≥ 7.4 (`HEXPIRE`).
 | `POST` | `/api/v1/peers/announce` | Requires `Authorization: Bearer …`; store bitfield + locality; **observed connection IP** (ignore a client-advertised IP) |
 | `GET` | `/api/v1/assets/{assetId}/peers?peerId=…&limit=20` | Exclude self; rank `siteId` then `networkGroupId`; cap at 20 |
 
-Redis key: `swarm:{assetId}:peers` (HASH). Field = `peerId`. Per-field TTL **45s**, so a heartbeat every ~15s keeps a record alive. The agent does not run that loop yet — a swarm is currently handed its candidate list directly.
+Redis key: `swarm:{assetId}:peers` (HASH). Field = `peerId`. Per-field TTL **45s**. `AnnounceLoop` heartbeats so a record stays alive. Paper runners still pass candidates in directly so B2/B3 do not depend on a live tracker.
 
-A token for a different peer, or one claiming a locality it was not issued for, is a 401. Tokens gate the control plane; they never authorize content. Set `swarmedge.tracker.token-secret` per deployment — an empty value generates a random secret at startup, so tokens will not survive a restart.
+A token for a different peer, or one claiming a locality it was not issued for, is a 401. Tokens gate the control plane; they never authorize content. `HmacPeerAuth` is the same check on HELLO. Set `swarmedge.tracker.token-secret` per deployment — an empty value generates a random secret at startup, so tokens will not survive a restart.
 
-Carried forward from blueprint §10: Actuator health/Prometheus, announce rate limits, `GET /api/v1/assets/{assetId}/manifest`, and the `capabilities` / `uploadBudget` fields LAPS would read a capacity hint from.
+Carried forward from blueprint §10: Actuator health/Prometheus. Announce rate limits, `GET/PUT /api/v1/assets/{assetId}/manifest`, and `capabilities` / `uploadBudget` / `uploadLoad` on announce are in. `uploadLoad` is the 0..1 hint LAPS reads as capacity.
 
 ## Peer-to-peer transfer (implemented)
 
