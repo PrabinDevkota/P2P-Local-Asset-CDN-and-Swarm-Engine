@@ -15,8 +15,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * freshness stay separate so a forged expired manifest still fails as a bad
  * signature first, and a valid old stamp cannot be replayed as a current release.
  *
- * <p>Highest-seen is per process. A restart forgets it; that is a limitation of this
- * phase, not a licence to skip the check while the process is up.
+ * <p>Highest-seen is in memory unless a {@link SequenceLedger} is supplied. With a
+ * ledger, a restart still refuses a sequence behind the one already accepted.
  */
 public final class ReleaseFreshness {
 
@@ -27,15 +27,24 @@ public final class ReleaseFreshness {
 
     private final Clock clock;
     private final RollbackPolicy rollback;
+    private final SequenceLedger ledger;
     private final ConcurrentHashMap<String, Long> highest = new ConcurrentHashMap<>();
 
     public ReleaseFreshness(Clock clock) {
-        this(clock, RollbackPolicy.REJECT);
+        this(clock, RollbackPolicy.REJECT, null);
     }
 
     public ReleaseFreshness(Clock clock, RollbackPolicy rollback) {
+        this(clock, rollback, null);
+    }
+
+    public ReleaseFreshness(Clock clock, RollbackPolicy rollback, SequenceLedger ledger) {
         this.clock = Objects.requireNonNull(clock, "clock");
         this.rollback = Objects.requireNonNull(rollback, "rollback");
+        this.ledger = ledger;
+        if (ledger != null) {
+            highest.putAll(ledger.snapshot());
+        }
     }
 
     /**
@@ -72,6 +81,13 @@ public final class ReleaseFreshness {
                                 + " for product " + manifest.productId());
             }
             return;
+        }
+        if (ledger != null && (seen == null || sequence > seen)) {
+            try {
+                ledger.raise(manifest.productId(), sequence);
+            } catch (java.io.IOException e) {
+                throw new ManifestValidationException("could not record highest-seen sequence");
+            }
         }
         highest.merge(manifest.productId(), sequence, Math::max);
     }
