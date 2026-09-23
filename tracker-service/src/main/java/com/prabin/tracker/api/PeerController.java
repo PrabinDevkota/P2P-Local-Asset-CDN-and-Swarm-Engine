@@ -51,7 +51,8 @@ public final class PeerController {
         String ip = observedIp(request);
         directory.save(
                 v.assetId(),
-                new PeerRecord(v.peerId(), ip, v.port(), v.siteId(), v.networkGroupId(), v.bitCount(), v.bits()));
+                new PeerRecord(v.peerId(), ip, v.port(), v.siteId(), v.networkGroupId(), v.bitCount(), v.bits(),
+                        v.capabilities(), v.uploadBudgetBytesPerSecond(), v.uploadLoad()));
         return new AnnounceAck(ip, Defaults.PEER_TTL_SECONDS);
     }
 
@@ -133,7 +134,10 @@ public final class PeerController {
             int port,
             String siteId,
             String networkGroupId,
-            AnnounceRequest.Bitfield bitfield
+            AnnounceRequest.Bitfield bitfield,
+            int capabilities,
+            long uploadBudget,
+            Double uploadLoad
     ) {
         static Candidate from(PeerRecord peer) {
             return new Candidate(
@@ -142,7 +146,10 @@ public final class PeerController {
                     peer.port(),
                     peer.siteId(),
                     peer.networkGroupId(),
-                    new AnnounceRequest.Bitfield(peer.bitCount(), Hex.toLowerHex(peer.bits())));
+                    new AnnounceRequest.Bitfield(peer.bitCount(), Hex.toLowerHex(peer.bits())),
+                    peer.capabilities(),
+                    peer.uploadBudgetBytesPerSecond(),
+                    peer.uploadLoad().isPresent() ? peer.uploadLoad().getAsDouble() : null);
         }
     }
 }
