@@ -2,6 +2,7 @@
 # Cache and local peers first, then a same-site EDGE, then limited origin.
 # Nothing here is a target or a claim; numbers come out of a run.
 scenarioId: b6-hybrid-fallback
+cacheState: cold
 baseline: B6
 description: One leecher rebuilds one immutable asset with EDGE and origin fallback.
 
@@ -73,3 +74,12 @@ edge:
 churn:
   killFractions: [0.0, 0.10, 0.25]
   everyPeerHoldsEverything: true
+
+scale:
+  peers: 8
+  clients: 1
+network:
+  profile: loopback
+  delayMillis: 0
+  jitterMillis: 0
+  lossPercent: 0
