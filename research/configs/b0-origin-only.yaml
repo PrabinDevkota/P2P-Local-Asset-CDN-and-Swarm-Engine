@@ -2,6 +2,7 @@
 # Reference point for every later baseline. Nothing here is a target or a claim;
 # numbers come out of a run, they do not go into a config.
 scenarioId: b0-origin-only
+cacheState: cold
 baseline: B0
 description: One client pulls one immutable asset from origin over ranged HTTP.
 
@@ -26,3 +27,14 @@ origin:
   maxBackoffMillis: 5000
   connectTimeoutMillis: 5000
   requestTimeoutMillis: 60000
+
+scale:
+  peers: 0
+  clients: 1
+network:
+  profile: loopback
+  delayMillis: 0
+  jitterMillis: 0
+  lossPercent: 0
+churn:
+  mode: none
