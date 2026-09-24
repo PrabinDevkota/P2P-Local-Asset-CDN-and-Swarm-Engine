@@ -2,6 +2,7 @@
 # The comparison is B0 (cold) against this (warm). Nothing here is a target
 # or a claim; origin bytes and cache bytes come out of a run.
 scenarioId: b4-warm-cache
+cacheState: warm
 baseline: B4
 description: Repeats share one chunk store so later runs are satisfied from cache.
 
@@ -31,3 +32,14 @@ origin:
 cache:
   maxBytes: 1073741824
   minFreeBytes: 0
+
+scale:
+  peers: 0
+  clients: 1
+network:
+  profile: loopback
+  delayMillis: 0
+  jitterMillis: 0
+  lossPercent: 0
+churn:
+  mode: none
