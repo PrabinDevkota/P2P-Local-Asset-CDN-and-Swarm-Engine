@@ -1,0 +1,18 @@
+# Flash-crowd client count named by the scenario matrix (10).
+# verify does not download an asset at this count. ClientFanout is what starts N clients.
+scenarioId: scale-clients-10
+baseline: B6
+cacheState: cold
+scale:
+  peers: 8
+  clients: 10
+network:
+  profile: loopback
+  delayMillis: 0
+  jitterMillis: 0
+  lossPercent: 0
+churn:
+  mode: none
+run:
+  repetitions: 5
+  seed: 20260924
