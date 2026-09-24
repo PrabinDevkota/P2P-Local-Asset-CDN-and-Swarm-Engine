@@ -3,6 +3,7 @@
 # knowing where the peers are? Nothing here is a target or a claim; numbers come
 # out of a run, they do not go into a config.
 scenarioId: b2-locality
+cacheState: cold
 baseline: B2
 description: One leecher rebuilds one immutable asset, preferring the nearest peers.
 
@@ -81,3 +82,12 @@ churn:
   # Seeders each hold the whole asset here, so coverage survives the kills. A
   # scenario where it does not is a failure case, not a smoke test.
   everyPeerHoldsEverything: true
+
+scale:
+  peers: 8
+  clients: 1
+network:
+  profile: loopback
+  delayMillis: 0
+  jitterMillis: 0
+  lossPercent: 0
