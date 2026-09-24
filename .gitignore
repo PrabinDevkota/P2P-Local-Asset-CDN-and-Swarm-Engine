@@ -39,3 +39,7 @@ logs/
 
 # Maven wrapper jar (downloaded locally)
 .mvn/wrapper/maven-wrapper.jar
+
+# Paper runs are produced by scripts/reproduce_paper and are not source.
+research/raw/
+research/processed/
