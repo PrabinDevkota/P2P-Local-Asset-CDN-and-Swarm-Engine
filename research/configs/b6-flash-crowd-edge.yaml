@@ -2,6 +2,7 @@
 # Live 10/25/50 client counts stay Phase 10. This file only names the ladder.
 # Nothing here is a target or a claim; numbers come out of a run.
 scenarioId: b6-flash-crowd-edge
+cacheState: cold
 baseline: B6
 description: Peer swarm plus same-site EDGE and limited origin.
 
@@ -69,3 +70,12 @@ edge:
 churn:
   killFractions: [0.0]
   everyPeerHoldsEverything: true
+
+scale:
+  peers: 8
+  clients: 1
+network:
+  profile: loopback
+  delayMillis: 0
+  jitterMillis: 0
+  lossPercent: 0
