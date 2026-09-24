@@ -2,7 +2,7 @@
 
 Task IDs are the blueprint's backlog IDs (§16). `./mvnw verify` is the gate for every step.
 
-Phases 0–9 are complete. **Phase 10 (experiment harness) is next.**
+Phases 0–10 are complete. **Phase 11 (FastCDC) is next.** Do not pull it forward until a paper run needs it.
 
 ## What exists
 
@@ -111,20 +111,22 @@ EDGE is the same binary. Role is not on the tracker wire. Origin stays chunk-gra
 
 Announce rate limiting (`rate:{peerId}:announce`) landed here as the carried-forward abuse control. A burst is HTTP 429; other peers still announce.
 
-## Carried forward (not blocking Phase 10)
+## Phase 10 — Experiment harness — complete
 
-These are blueprint items whose phase is closed but which later phases assume.
-
-| Item | Blueprint ref | Where it lands |
+| Step | Job | Outcome |
 | --- | --- | --- |
-| Actuator health + Prometheus on the tracker | §10.1 | Phase 10 observability |
-| Immutable raw run folders under `research/raw/` | §13.3 | P10-03 |
-| `docs/architecture.md`, `docs/experiment-method.md` | §14 | Before the paper draft |
+| P10-01 | Scenario YAML schema | `PaperScenario` requires baseline, scale, network, churn, cache, seed, repetitions |
+| P10-02 | netem + fault injection | `TcNetem` applies and `close()` removes the qdisc, including after a failed run |
+| P10-03 | Immutable raw results | `RunFolder` writes the §13.3 files and refuses to overwrite a passed run |
+| P10-04 | Reproduce script | `scripts/reproduce_paper.ps1` writes `research/processed/b0-smoke-table.md` |
+
+Actuator `GET /actuator/health` and `GET /actuator/prometheus` are on the tracker. Client counts 10, 25, and 50 are named and `ClientFanout` runs that many tasks. A full-asset download at those counts is not part of `./mvnw verify`.
 
 ## Later (do not pull forward)
 
-- Phase 10 experiment harness — **next**
-- Phase 11 FastCDC; Phase 12 release
+Phase 10 closed the harness, the tracker health and Prometheus endpoints, and `docs/architecture.md` plus `docs/experiment-method.md`.
+
+- Phase 11 FastCDC; Phase 12 demo, Compose, and the paper pack
 - No invented Mbps or offload %
 
 ## Working rule
