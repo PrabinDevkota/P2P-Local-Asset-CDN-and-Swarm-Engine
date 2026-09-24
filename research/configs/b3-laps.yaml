@@ -2,6 +2,7 @@
 # This is the configuration the paper is about. Nothing here is a target or a claim;
 # numbers come out of a run, they do not go into a config.
 scenarioId: b3-laps
+cacheState: cold
 baseline: B3
 description: One leecher rebuilds one immutable asset, choosing peers by LAPS score.
 
@@ -81,3 +82,12 @@ churn:
   # Seeders each hold the whole asset here, so coverage survives the kills. A
   # scenario where it does not is a failure case, not a smoke test.
   everyPeerHoldsEverything: true
+
+scale:
+  peers: 8
+  clients: 1
+network:
+  profile: loopback
+  delayMillis: 0
+  jitterMillis: 0
+  lossPercent: 0
