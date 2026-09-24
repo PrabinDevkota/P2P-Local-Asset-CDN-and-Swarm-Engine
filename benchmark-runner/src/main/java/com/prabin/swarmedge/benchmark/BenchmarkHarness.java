@@ -72,8 +72,10 @@ public final class BenchmarkHarness {
             if (process.waitFor() == 0 && !text.isBlank()) {
                 return text;
             }
-        } catch (Exception ignored) {
+        } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        } catch (IOException ignored) {
+            // git is absent. The run record says unknown rather than inventing a hash.
         }
         return "unknown";
     }

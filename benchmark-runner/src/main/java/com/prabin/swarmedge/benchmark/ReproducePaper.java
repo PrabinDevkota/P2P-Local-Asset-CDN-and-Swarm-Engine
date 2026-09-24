@@ -8,8 +8,10 @@ import com.prabin.swarmedge.manifest.ReleaseManifest;
 import com.prabin.swarmedge.manifest.ReleaseManifestFactory;
 import com.prabin.swarmedge.origin.OriginHttpServer;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
 import java.security.KeyPair;
 import java.util.List;
 import java.util.Random;
@@ -35,7 +37,7 @@ public final class ReproducePaper {
             Path table = run(work, raw, processed);
             System.out.println(table.toAbsolutePath());
         } finally {
-            // Temp files are the asset and the origin root, not the raw run.
+            deleteTree(work);
         }
     }
 
@@ -90,7 +92,8 @@ public final class ReproducePaper {
             B0Runner.Summary summary = new B0Runner(scenario, origin.baseUri(), work.resolve("runs")).run(manifest);
             String json = "{\"baseline\":\"B0\",\"assetSha256\":\"" + summary.assetSha256()
                     + "\",\"repetitions\":" + summary.runs().size() + "}";
-            new BenchmarkHarness(raw, ImpairmentSession.none()).execute(config, "b0-smoke", () -> json);
+            String runId = "b0-smoke-" + System.currentTimeMillis();
+            new BenchmarkHarness(raw, ImpairmentSession.none()).execute(config, runId, () -> json);
             return writeTable(processed.resolve("b0-smoke-table.md"), summary);
         }
     }
@@ -112,6 +115,17 @@ public final class ReproducePaper {
         Files.createDirectories(table.getParent());
         Files.writeString(table, text);
         return table;
+    }
+
+    private static void deleteTree(Path root) throws IOException {
+        if (!Files.exists(root)) {
+            return;
+        }
+        try (var paths = Files.walk(root)) {
+            for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) {
+                Files.deleteIfExists(path);
+            }
+        }
     }
 
     private static Path locateRepo() {

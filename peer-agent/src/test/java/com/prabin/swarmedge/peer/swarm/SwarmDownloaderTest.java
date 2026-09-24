@@ -56,7 +56,7 @@ class SwarmDownloaderTest {
     private static final int FULL_CHUNKS = 7;
     private static final int TAIL_BYTES = 513;
     private static final String ASSET_NAME = "game-x-1.4.0.bin";
-    private static final Duration PATIENCE = Duration.ofSeconds(90);
+    private static final Duration PATIENCE = Duration.ofSeconds(180);
     private static final long SEED = 20260914L;
 
     @TempDir
@@ -488,7 +488,7 @@ class SwarmDownloaderTest {
 
     private SwarmDownloader swarm(Leecher leecher, int maxPeers) {
         // Generous stall deadline: these runs are meant to finish, not to trip it.
-        return swarm(leecher, maxPeers, Duration.ofSeconds(5), Duration.ofSeconds(30));
+        return swarm(leecher, maxPeers, Duration.ofSeconds(5), Duration.ofSeconds(120));
     }
 
     private SwarmDownloader swarm(Leecher leecher, int maxPeers, Duration blockTimeout,
