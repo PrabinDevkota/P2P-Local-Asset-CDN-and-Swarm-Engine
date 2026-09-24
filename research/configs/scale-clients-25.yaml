@@ -1,0 +1,17 @@
+# Flash-crowd client count named by the scenario matrix (25).
+scenarioId: scale-clients-25
+baseline: B6
+cacheState: cold
+scale:
+  peers: 8
+  clients: 25
+network:
+  profile: loopback
+  delayMillis: 0
+  jitterMillis: 0
+  lossPercent: 0
+churn:
+  mode: none
+run:
+  repetitions: 5
+  seed: 20260924
