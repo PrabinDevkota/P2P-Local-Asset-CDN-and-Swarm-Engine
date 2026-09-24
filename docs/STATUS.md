@@ -46,7 +46,7 @@ Raw run folders (`research/raw/<runId>/` with `config.yaml`, `git_commit.txt`, `
 
 Announce now requires `Authorization: Bearer <token>`. A token for another peer, or one claiming a locality it was not issued for, is rejected with 401. Tokens are a dev/research stand-in for mTLS: they gate the control plane and never authorize content.
 
-Still open against blueprint §10: Actuator health / Prometheus. Announce carries `capabilities`, `uploadBudget`, and `uploadLoad`. `GET/PUT /api/v1/assets/{assetId}/manifest` stores `asset:{assetId}:manifest-meta` as an index, not a trust root.
+Announce carries `capabilities`, `uploadBudget`, and `uploadLoad`. `GET/PUT /api/v1/assets/{assetId}/manifest` stores `asset:{assetId}:manifest-meta` as an index, not a trust root. `GET /actuator/health` reports Redis, and `GET /actuator/prometheus` exposes process metrics. Paper runs do not read those endpoints.
 
 Tracker never stores file bytes and is not a trust root.
 
@@ -142,7 +142,7 @@ Not covered in this phase: shrinking the request window, and immutable `research
 - [x] P8-03 `OriginChunkFetcher` cancellable Range GET; `HybridDownloader` first-arrival-wins at chunk granularity
 - [x] P8-04 `OriginByteLedger` 1 s peak; `research/configs/b6-*.yaml` same asset/seed as B3; `SwarmRunner` records origin / peak / EDGE / peer / cache bytes
 
-EDGE is process policy, not a new protocol role and not a tracker announce field. Origin stays chunk-granular HTTP. B1–B3 YAML and LAPS default weights are unchanged. B6 claims no Mbps or offload %. Live 10/25/50 client counts stay Phase 10.
+EDGE is process policy, not a new protocol role and not a tracker announce field. Origin stays chunk-granular HTTP. B1–B3 YAML numbers and LAPS default weights are unchanged. B6 claims no Mbps or offload %. `scale.clients` of 10, 25, and 50 is named; `ClientFanout` runs that many tasks.
 
 ## Phase 9 — Security hardening — done
 
@@ -152,10 +152,19 @@ EDGE is process policy, not a new protocol role and not a tracker announce field
 - [x] P9-04 Security overhead: `research/configs/b9-security-overhead.yaml` plus `SecurityOverheadRunner` records hash / sign / verify / HMAC sample times and asserts none of them as an SLO.
 - [x] Announce rate limit: `rate:{peerId}:announce`; a burst is 429 and does not block another peer.
 
-Highest-seen sequence is kept in a `SequenceLedger` when the caller passes one (`manifest-tool verify --seen`). Without that file a restart still forgets it. HELLO can be checked with `HmacPeerAuth` against the same HMAC the tracker issues; lab transfers still accept any token. Actuator/Prometheus stay Phase 10.
+Highest-seen sequence is kept in a `SequenceLedger` when the caller passes one (`manifest-tool verify --seen`). Without that file a restart still forgets it. HELLO can be checked with `HmacPeerAuth` against the same HMAC the tracker issues; lab transfers still accept any token.
+
+## Phase 10 — Experiment harness — done
+
+- [x] P10-01 `PaperScenario`: every committed scenario names baseline, scale, network, churn, cache, seed, and repetitions
+- [x] P10-02 `TcNetem`: apply, and remove in `close()` even when the run throws. A missing `tc` is recorded as not applied
+- [x] P10-03 `research/raw/<runId>/` with config, environment, git commit, seed, events, peer metrics, summary, validation, and a log. A passed run is not overwritten
+- [x] P10-04 `scripts/reproduce_paper.ps1` rebuilds a B0 smoke table. The table does not state an offload ratio
+
+`docs/architecture.md` and `docs/experiment-method.md` describe the planes and the run rules.
 
 ## Not started
 
-- Phases 10–12 as in the blueprint
+- Phases 11–12 as in the blueprint
 
 Peers must call `ManifestVerifier` with a trusted public key, then `ReleaseFreshness.accept`. `ManifestJson.parse` only checks JSON shape.
