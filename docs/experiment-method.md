@@ -8,7 +8,7 @@ Paper runs are committed YAML under `research/configs/`. A config is an input. I
 
 | Factor | Where |
 | --- | --- |
-| baseline | `baseline` (`B0`–`B4`, `B6`, `B9`) |
+| baseline | `baseline` (`B0`–`B6`, `B9`) |
 | scale | `scale.peers`, `scale.clients` |
 | network | `network.profile`, delay, jitter, loss |
 | churn | `churn.killFractions` or `churn.mode` |
@@ -29,6 +29,8 @@ B1, B2, and B3 still differ only in `scheduler`. Adding `scale`, `network`, and 
 `BenchmarkHarness` writes `research/raw/<runId>/` with `config.yaml`, `environment.json`, `git_commit.txt`, `seed.txt`, `events.csv.gz`, `peer_metrics.csv.gz`, `summary.json`, `validation.json`, and `stdout/runner.log`. A folder whose `validation.json` says `passed: true` is not overwritten.
 
 `scripts/reproduce_paper.ps1` (and `reproduce_paper.sh`) runs a 320-byte B0 three times and writes `research/processed/b0-smoke-table.md`. The table lists origin bytes, cache bytes, and elapsed time. It does not compute an offload ratio.
+
+`research/configs/b5-fastcdc.yaml` names a FastCDC cross-version study. `CrossVersionStudy` records shared hash bytes, canonical manifest size, chunking time, elapsed time, and a 95% bootstrap interval for B4 and B5. It does not rank them and does not state a dedup ratio. `./mvnw verify` runs that study on a small file, not the 64 MiB size named in the YAML.
 
 ## What a number is allowed to mean
 
