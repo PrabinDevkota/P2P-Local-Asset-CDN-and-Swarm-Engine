@@ -2,7 +2,7 @@
 
 Task IDs are the blueprint's backlog IDs (§16). `./mvnw verify` is the gate for every step.
 
-Phases 0–10 are complete. **Phase 11 (FastCDC) is next.** Do not pull it forward until a paper run needs it.
+Phases 0–11 are complete. **Phase 12 (demo, Compose, paper pack) is next.** Do not pull it forward.
 
 ## What exists
 
@@ -14,7 +14,7 @@ Phases 0–10 are complete. **Phase 11 (FastCDC) is next.** Do not pull it forwa
 | `origin-fixture/` | `GET /files/{name}` 200/206/404, `GET /manifests/{name}.json` copy only, served-byte ledger plus a 1 s peak per run |
 | `peer-agent/` | Origin, swarm, LAPS, `HybridDownloader`, and `PeerQuarantine` eligibility |
 | `tracker-service/` | Announce with bearer peer token, Redis `HEXPIRE` 45 s, ranked candidates, `POST /api/v1/auth/peer-token`, announce rate limit |
-| `benchmark-runner/` | `B0Runner`, `SwarmRunner`, and `SecurityOverheadRunner` with B0–B4, B6, and B9 configs |
+| `benchmark-runner/` | `B0Runner`, `SwarmRunner`, `SecurityOverheadRunner`, and `CrossVersionStudy` with B0–B6 and B9 configs |
 
 ## Phase 4 — Two-peer Netty session (`peer-agent/`) — complete
 
@@ -122,12 +122,18 @@ Announce rate limiting (`rate:{peerId}:announce`) landed here as the carried-for
 
 Actuator `GET /actuator/health` and `GET /actuator/prometheus` are on the tracker. Client counts 10, 25, and 50 are named and `ClientFanout` runs that many tasks. A full-asset download at those counts is not part of `./mvnw verify`.
 
+## Phase 11 — FastCDC — complete
+
+| Step | Job | Outcome |
+| --- | --- | --- |
+| P11-01 | `Chunker` | Fixed and FastCDC catalogs are ordered `ChunkEntry` rows. Transfer still uses `BlockPlan` |
+| P11-02 | Version fixture | Insert, delete, and replace are exact. The edit is asserted |
+| P11-03 | B4 vs B5 | Shared bytes, manifest size, chunking time, elapsed time, and a 95% bootstrap interval. No ranking |
+
 ## Later (do not pull forward)
 
-Phase 10 closed the harness, the tracker health and Prometheus endpoints, and `docs/architecture.md` plus `docs/experiment-method.md`.
-
-- Phase 11 FastCDC; Phase 12 demo, Compose, and the paper pack
-- No invented Mbps or offload %
+- Phase 12 demo, Compose, and the paper pack
+- No invented Mbps, offload %, or dedup ratio
 
 ## Working rule
 
