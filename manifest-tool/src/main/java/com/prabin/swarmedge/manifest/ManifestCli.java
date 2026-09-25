@@ -23,7 +23,9 @@ public final class ManifestCli {
               gen-key --out-dir <dir>
               sign --file <path> --product <id> --version <ver> --signing-key-id <id> \\
                    --private-key <pem> --store <dir> --out <manifest.json> \\
-                   [--chunk-size <bytes>] [--sequence <n>] [--expires-days <n>]
+                   [--chunk-size <bytes>] [--chunking FIXED|FASTCDC] \\
+                   [--min-size <bytes>] [--max-size <bytes>] \\
+                   [--sequence <n>] [--expires-days <n>]
               verify --manifest <json> --public-key <pem> [--seen <sequence-ledger>]
             """;
 
@@ -79,7 +81,7 @@ public final class ManifestCli {
             Files.createDirectories(outFile.getParent());
         }
 
-        FileChunker chunker = new FileChunker(chunkSize);
+        Chunker chunker = chunker(flags, chunkSize);
         ChunkStore store = new ChunkStore(storeRoot);
         List<ChunkEntry> chunks = new AssetIngestor(chunker, store).ingest(file);
         Instant created = Instant.now().truncatedTo(ChronoUnit.SECONDS);
@@ -87,7 +89,7 @@ public final class ManifestCli {
                 require(flags, "product"),
                 require(flags, "version"),
                 file,
-                chunkSize,
+                chunker.spec(),
                 chunks,
                 created.toString(),
                 created.plus(expiresDays, ChronoUnit.DAYS).toString(),
@@ -110,6 +112,25 @@ public final class ManifestCli {
         new ReleaseFreshness(Clock.systemUTC(), ReleaseFreshness.RollbackPolicy.REJECT, ledger).accept(manifest);
         out.println(CanonicalManifest.assetId(manifest).toHex());
         return 0;
+    }
+
+    private static Chunker chunker(Map<String, String> flags, long chunkSize) {
+        String mode = flags.getOrDefault("chunking", ManifestValidator.MODE_FIXED);
+        if (ManifestValidator.MODE_FIXED.equals(mode)) {
+            if (flags.containsKey("min-size") || flags.containsKey("max-size")) {
+                throw new IllegalArgumentException("FIXED chunking does not take --min-size or --max-size");
+            }
+            return new FileChunker(chunkSize);
+        }
+        if (!ManifestValidator.MODE_FASTCDC.equals(mode)) {
+            throw new IllegalArgumentException("chunking must be FIXED or FASTCDC");
+        }
+        long min = longFlag(flags, "min-size", 0);
+        long max = longFlag(flags, "max-size", 0);
+        if (min > Integer.MAX_VALUE || chunkSize > Integer.MAX_VALUE || max > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("FastCDC sizes must fit in a byte array");
+        }
+        return new FastCdcChunker((int) min, (int) chunkSize, (int) max);
     }
 
     private static Map<String, String> flags(String[] args, int from) {
