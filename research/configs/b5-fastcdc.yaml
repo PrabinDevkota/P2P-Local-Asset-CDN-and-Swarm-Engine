@@ -1,0 +1,41 @@
+# B5: same bytes as a fixed-chunk warm cache, cut with FastCDC.
+# Shared bytes, manifest size, and chunking time come out of a run.
+# This file does not state a dedup ratio.
+scenarioId: b5-fastcdc
+baseline: B5
+cacheState: warm
+description: Cross-version reuse with content-defined chunks.
+
+asset:
+  productId: game-x
+  version: 1.4.0
+  fileName: game-x-1.4.0.bin
+  sizeBytes: 67108864
+  chunkSizeBytes: 65536
+
+chunking:
+  mode: FASTCDC
+  minSize: 16384
+  averageSize: 65536
+  maxSize: 262144
+
+mutation:
+  kind: insert
+  at: 1048576
+  length: 4096
+
+run:
+  repetitions: 5
+  seed: 20260925
+  coldCache: false
+
+scale:
+  peers: 0
+  clients: 1
+network:
+  profile: loopback
+  delayMillis: 0
+  jitterMillis: 0
+  lossPercent: 0
+churn:
+  mode: none
