@@ -27,6 +27,11 @@ public final class CanonicalManifest {
         field(sb, "chunking").append('{');
         field(sb, "mode").append(quote(manifest.chunking().mode())).append(',');
         field(sb, "chunkSize").append(manifest.chunking().chunkSize());
+        if (manifest.chunking().fastCdc()) {
+            sb.append(',');
+            field(sb, "minSize").append(manifest.chunking().minSize()).append(',');
+            field(sb, "maxSize").append(manifest.chunking().maxSize());
+        }
         sb.append("},");
         field(sb, "chunks").append('[');
         List<ChunkEntry> chunks = manifest.chunks();
