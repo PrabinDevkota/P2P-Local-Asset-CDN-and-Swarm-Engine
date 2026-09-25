@@ -25,13 +25,28 @@
     "fileName": { "type": "string", "minLength": 1 },
     "fileSize": { "type": "integer", "minimum": 0 },
     "chunking": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["mode", "chunkSize"],
-      "properties": {
-        "mode": { "type": "string", "const": "FIXED" },
-        "chunkSize": { "type": "integer", "minimum": 1 }
-      }
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "chunkSize"],
+          "properties": {
+            "mode": { "const": "FIXED" },
+            "chunkSize": { "type": "integer", "minimum": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "chunkSize", "minSize", "maxSize"],
+          "properties": {
+            "mode": { "const": "FASTCDC" },
+            "chunkSize": { "type": "integer", "minimum": 1 },
+            "minSize": { "type": "integer", "minimum": 1 },
+            "maxSize": { "type": "integer", "minimum": 1 }
+          }
+        }
+      ]
     },
     "chunks": {
       "type": "array",
