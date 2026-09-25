@@ -13,8 +13,9 @@ A release manifest is the **only** content-trust document. Peers and the tracker
 | `schemaVersion` | `1` |
 | `productId`, `version`, `fileName` | non-empty strings |
 | `fileSize` | unsigned 64-bit in the Java model (`long`, non-negative) |
-| `chunking.mode` | `FIXED` for the MVP |
-| `chunking.chunkSize` | default 4 MiB; every non-final chunk equals this |
+| `chunking.mode` | `FIXED` or `FASTCDC` |
+| `chunking.chunkSize` | fixed size, or the FastCDC average |
+| `chunking.minSize`, `chunking.maxSize` | FastCDC only; omitted from FIXED canonical JSON |
 | `chunks[]` | `index`, `offset`, `length`, `sha256` (64 lowercase hex) |
 | `createdAt`, `expiresAt` | UTC `YYYY-MM-DDTHH:MM:SSZ` |
 | `sequence` | non-negative; used for rollback policy later |
@@ -24,7 +25,8 @@ A release manifest is the **only** content-trust document. Peers and the tracker
 ## Invariants
 
 - Chunks are ordered by `index` 0..n-1, contiguous, no overlap, cover `fileSize` exactly.
-- Final chunk may be shorter than `chunkSize`.
+- FIXED: every non-final chunk equals `chunkSize`. The final chunk may be shorter.
+- FASTCDC: a non-final chunk is between `minSize` and `maxSize`. The final chunk may be shorter than `minSize`. `chunkSize` is the average.
 - `assetId` = SHA-256 of **canonical unsigned JSON** (all fields except `signature`, compact, fixed key order). See `CanonicalManifest`.
 - Signature (later) is over the same unsigned canonical bytes.
 
