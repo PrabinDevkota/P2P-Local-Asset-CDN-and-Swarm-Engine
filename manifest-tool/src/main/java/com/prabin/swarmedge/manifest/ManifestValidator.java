@@ -8,6 +8,7 @@ public final class ManifestValidator {
 
     public static final int SCHEMA_VERSION = 1;
     public static final String MODE_FIXED = "FIXED";
+    public static final String MODE_FASTCDC = "FASTCDC";
     private static final Pattern SHA256 = Pattern.compile("^[0-9a-f]{64}$");
     private static final Pattern INSTANT = Pattern.compile(
             "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$");
@@ -27,11 +28,23 @@ public final class ManifestValidator {
             throw new ManifestValidationException("fileSize must be non-negative");
         }
         ChunkingSpec chunking = manifest.chunking();
-        if (chunking == null || !MODE_FIXED.equals(chunking.mode())) {
-            throw new ManifestValidationException("chunking.mode must be FIXED");
+        if (chunking == null) {
+            throw new ManifestValidationException("chunking is required");
+        }
+        boolean fixed = MODE_FIXED.equals(chunking.mode());
+        boolean cdc = MODE_FASTCDC.equals(chunking.mode());
+        if (!fixed && !cdc) {
+            throw new ManifestValidationException("chunking.mode must be FIXED or FASTCDC");
         }
         if (chunking.chunkSize() <= 0) {
             throw new ManifestValidationException("chunkSize must be positive");
+        }
+        if (cdc && (chunking.minSize() <= 0 || chunking.minSize() > chunking.chunkSize()
+                || chunking.chunkSize() > chunking.maxSize())) {
+            throw new ManifestValidationException("FASTCDC requires 0 < minSize <= chunkSize <= maxSize");
+        }
+        if (fixed && (chunking.minSize() != 0 || chunking.maxSize() != 0)) {
+            throw new ManifestValidationException("FIXED chunking does not carry minSize or maxSize");
         }
         List<ChunkEntry> chunks = manifest.chunks();
         if (chunks == null || chunks.isEmpty()) {
@@ -54,11 +67,16 @@ public final class ManifestValidator {
                 throw new ManifestValidationException("chunks must be contiguous (gap or overlap)");
             }
             boolean last = i == chunks.size() - 1;
-            if (!last && chunk.length() != chunking.chunkSize()) {
-                throw new ManifestValidationException("non-final chunk must equal chunkSize");
-            }
-            if (last && chunk.length() > chunking.chunkSize()) {
-                throw new ManifestValidationException("final chunk longer than chunkSize");
+            if (fixed) {
+                if (!last && chunk.length() != chunking.chunkSize()) {
+                    throw new ManifestValidationException("non-final chunk must equal chunkSize");
+                }
+                if (last && chunk.length() > chunking.chunkSize()) {
+                    throw new ManifestValidationException("final chunk longer than chunkSize");
+                }
+            } else if (chunk.length() > chunking.maxSize()
+                    || (!last && chunk.length() < chunking.minSize())) {
+                throw new ManifestValidationException("FASTCDC chunk length outside minSize..maxSize");
             }
             if (chunk.sha256() == null || !SHA256.matcher(chunk.sha256()).matches()) {
                 throw new ManifestValidationException("sha256 must be 64 lowercase hex characters");
