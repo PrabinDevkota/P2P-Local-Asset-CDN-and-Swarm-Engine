@@ -8,9 +8,13 @@ import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import io.lettuce.core.codec.ByteArrayCodec;
+import io.lettuce.core.output.IntegerOutput;
+import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceConnection;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
-import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.GenericContainer;
@@ -103,9 +107,11 @@ class PeerDirectoryLoadTest {
                 assertThat(discover(directory, self)).hasSize(Defaults.TRACKER_CANDIDATE_LIMIT);
 
                 long[] nanos = measure(directory, self);
+                long stateBytes = memoryUsage(template);
                 log.info("redis discovery over {} records: p50={}us p95={}us p99={}us stateBytes={}",
                         PEER_COUNT, micros(nanos, 50), micros(nanos, 95), micros(nanos, 99),
-                        memoryUsage(template));
+                        stateBytes);
+                assertThat(stateBytes).isPositive();
             } finally {
                 factory.destroy();
             }
@@ -136,11 +142,30 @@ class PeerDirectoryLoadTest {
         return sortedNanos[Math.max(index, 0)] / 1_000;
     }
 
-    private static Long memoryUsage(StringRedisTemplate template) {
-        Object usage = template.execute((RedisCallback<Object>) connection -> connection.execute(
-                "MEMORY", "USAGE".getBytes(StandardCharsets.US_ASCII),
-                RedisPeerDirectory.key(ASSET).getBytes(StandardCharsets.US_ASCII)));
-        return usage instanceof Number n ? n.longValue() : null;
+    /**
+     * {@code MEMORY USAGE} replies with an integer. The generic {@code execute(String, byte[]...)}
+     * path decodes every reply as a bulk string, which Lettuce rejects for this command.
+     */
+    private static long memoryUsage(StringRedisTemplate template) {
+        byte[] key = RedisPeerDirectory.key(ASSET).getBytes(StandardCharsets.US_ASCII);
+        RedisConnectionFactory factory = template.getConnectionFactory();
+        if (factory == null) {
+            throw new IllegalStateException("redis connection factory is missing");
+        }
+        try (RedisConnection connection = factory.getConnection()) {
+            if (!(connection instanceof LettuceConnection lettuce)) {
+                throw new IllegalStateException("expected a Lettuce connection");
+            }
+            Object usage = lettuce.execute(
+                    "MEMORY",
+                    new IntegerOutput<>(ByteArrayCodec.INSTANCE),
+                    "USAGE".getBytes(StandardCharsets.US_ASCII),
+                    key);
+            if (!(usage instanceof Number number)) {
+                throw new IllegalStateException("MEMORY USAGE returned " + usage);
+            }
+            return number.longValue();
+        }
     }
 
     /** Peers spread over sites and network groups so ranking has real tiers to sort. */
