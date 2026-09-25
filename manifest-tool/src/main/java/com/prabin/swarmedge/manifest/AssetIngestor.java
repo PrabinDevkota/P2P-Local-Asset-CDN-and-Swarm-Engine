@@ -1,14 +1,9 @@
 package com.prabin.swarmedge.manifest;
 
-import com.prabin.swarmedge.common.id.Hex;
-
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -18,39 +13,40 @@ import java.util.Objects;
  */
 public final class AssetIngestor {
 
-    private final FileChunker chunker;
+    private final Chunker chunker;
     private final ChunkStore store;
 
-    public AssetIngestor(FileChunker chunker, ChunkStore store) {
+    public AssetIngestor(Chunker chunker, ChunkStore store) {
         this.chunker = Objects.requireNonNull(chunker, "chunker");
         this.store = Objects.requireNonNull(store, "store");
     }
 
     public List<ChunkEntry> ingest(Path file) throws IOException {
         Objects.requireNonNull(file, "file");
-        int chunkSize = chunker.chunkSize();
-        try (FileChannel channel = FileChannel.open(file)) {
-            long fileSize = channel.size();
-            if (fileSize == 0) {
-                return List.of();
-            }
-            MessageDigest sha256 = sha256();
-            ByteBuffer buffer = ByteBuffer.allocate(chunkSize);
-            List<ChunkEntry> chunks = new ArrayList<>();
-            long offset = 0;
-            int index = 0;
-            while (offset < fileSize) {
-                int length = (int) Math.min(chunkSize, fileSize - offset);
-                byte[] data = readSlice(channel, buffer, offset, length);
-                sha256.reset();
-                String hash = Hex.toLowerHex(sha256.digest(data));
-                store.putVerified(hash, data);
-                chunks.add(new ChunkEntry(index, offset, length, hash));
-                offset += length;
-                index++;
-            }
-            return List.copyOf(chunks);
+        List<ChunkEntry> catalog = chunker.chunk(file);
+        if (catalog.isEmpty()) {
+            return List.of();
         }
+        int window = windowSize(catalog);
+        try (FileChannel channel = FileChannel.open(file)) {
+            ByteBuffer buffer = ByteBuffer.allocate(window);
+            for (ChunkEntry chunk : catalog) {
+                byte[] data = readSlice(channel, buffer, chunk.offset(), (int) chunk.length());
+                store.putVerified(chunk.sha256(), data);
+            }
+            return catalog;
+        }
+    }
+
+    private static int windowSize(List<ChunkEntry> catalog) {
+        long max = 1;
+        for (ChunkEntry chunk : catalog) {
+            max = Math.max(max, chunk.length());
+        }
+        if (max > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("chunk longer than a byte array");
+        }
+        return (int) max;
     }
 
     private static byte[] readSlice(FileChannel channel, ByteBuffer buffer, long offset, int length)
@@ -69,13 +65,5 @@ public final class AssetIngestor {
         buffer.flip();
         buffer.get(data);
         return data;
-    }
-
-    private static MessageDigest sha256() {
-        try {
-            return MessageDigest.getInstance("SHA-256");
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 not available", e);
-        }
     }
 }
