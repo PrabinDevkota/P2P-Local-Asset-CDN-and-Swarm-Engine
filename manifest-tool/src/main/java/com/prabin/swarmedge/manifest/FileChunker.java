@@ -16,7 +16,7 @@ import java.util.List;
  * Splits a file into fixed-size integrity chunks and SHA-256 hashes each one.
  * Catalog only — {@link ChunkStore} / {@link AssetIngestor} write bytes.
  */
-public final class FileChunker {
+public final class FileChunker implements Chunker {
 
     private final int chunkSize;
 
@@ -38,6 +38,12 @@ public final class FileChunker {
         return chunkSize;
     }
 
+    @Override
+    public ChunkingSpec spec() {
+        return new ChunkingSpec(ManifestValidator.MODE_FIXED, chunkSize);
+    }
+
+    @Override
     public List<ChunkEntry> chunk(Path file) throws IOException {
         try (FileChannel channel = FileChannel.open(file)) {
             long fileSize = channel.size();
