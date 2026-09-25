@@ -26,7 +26,23 @@ public final class ReleaseManifestFactory {
             String expiresAt,
             long sequence,
             String signingKeyId) throws IOException {
+        return unsigned(productId, version, file,
+                new ChunkingSpec(ManifestValidator.MODE_FIXED, chunkSize),
+                chunks, createdAt, expiresAt, sequence, signingKeyId);
+    }
+
+    public static ReleaseManifest unsigned(
+            String productId,
+            String version,
+            Path file,
+            ChunkingSpec chunking,
+            List<ChunkEntry> chunks,
+            String createdAt,
+            String expiresAt,
+            long sequence,
+            String signingKeyId) throws IOException {
         Objects.requireNonNull(file, "file");
+        Objects.requireNonNull(chunking, "chunking");
         Objects.requireNonNull(chunks, "chunks");
         long fileSize = Files.size(file);
         long covered = 0;
@@ -42,7 +58,7 @@ public final class ReleaseManifestFactory {
                 version,
                 file.getFileName().toString(),
                 fileSize,
-                new ChunkingSpec(ManifestValidator.MODE_FIXED, chunkSize),
+                chunking,
                 List.copyOf(chunks),
                 createdAt,
                 expiresAt,
