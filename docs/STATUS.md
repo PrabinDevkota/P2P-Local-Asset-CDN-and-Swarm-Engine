@@ -163,8 +163,16 @@ Highest-seen sequence is kept in a `SequenceLedger` when the caller passes one (
 
 `docs/architecture.md` and `docs/experiment-method.md` describe the planes and the run rules.
 
+## Phase 11 — FastCDC — done
+
+- [x] P11-01 `Chunker`: `FileChunker` and `FastCdcChunker` both emit ordered `ChunkEntry` rows. `BlockPlan` still slices by `chunk.length()`
+- [x] P11-02 `VersionMutator` insert, delete, and replace are exact. The edit is asserted. A dedup ratio is not
+- [x] P11-03 `CrossVersionStudy` records shared hash bytes, canonical manifest size, chunking time, elapsed time, and a 95% bootstrap interval for B4 and B5. The table does not rank them
+
+FIXED canonical JSON is unchanged. B1–B3 YAML numbers and LAPS weights are unchanged. CDC is not part of the scheduler baseline.
+
 ## Not started
 
-- Phases 11–12 as in the blueprint
+- Phase 12 as in the blueprint (demo, Compose, Grafana, paper pack)
 
 Peers must call `ManifestVerifier` with a trusted public key, then `ReleaseFreshness.accept`. `ManifestJson.parse` only checks JSON shape.
