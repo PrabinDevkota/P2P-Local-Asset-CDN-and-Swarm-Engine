@@ -7,7 +7,7 @@
 
 - **Chunk** (default 4 MiB): integrity and cache unit. SHA-256. Only a fully verified chunk is stored and seeded.
 - **Block** (default 256 KiB, cap 512 KiB): network request unit inside a chunk. Independently retransmittable; accepted into the cache only after the parent chunk hashes.
-- MVP chunking mode is **FIXED**. FastCDC is Phase 11 and must not ship in the scheduler baseline.
+- Scheduler baselines stay **FIXED**. FASTCDC is a second manifest mode (ADR-007) and is not mixed into B1–B3.
 
 Tit-for-tat / CHOKE is **not** in protocol v1. Upload uses administrative budgets and backpressure.
 
