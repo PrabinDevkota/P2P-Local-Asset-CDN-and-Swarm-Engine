@@ -8,7 +8,7 @@ This is an engineering system and a research testbed. The first paper focuses on
 
 ## Status
 
-Phases **0–9 are done** against the blueprint backlog. `./mvnw verify` is the gate and is green. **Phase 10** (experiment harness) is next.
+Phases **0–12 are done** against the blueprint backlog. `./mvnw verify` is the gate. The release checklist is [docs/RELEASE.md](docs/RELEASE.md).
 
 | Phase | State | What it is |
 | --- | --- | --- |
@@ -22,7 +22,25 @@ Phases **0–9 are done** against the blueprint backlog. `./mvnw verify` is the 
 | 7 | Done | Cache lookup before network, LRU/quota eviction, warm-start inventory, baseline B4 |
 | 8 | Done | EDGE upload budget, deterministic fallback jitter, hybrid cancel-across-sources, baseline B6 |
 | 9 | Done | Manifest freshness/rollback, peer quarantine, secret/log audit, B9 security overhead, announce rate limit |
-| 10+ | Later | Experiment harness, FastCDC |
+| 10 | Done | Paper scenario factors, netem session, immutable raw runs, `scripts/reproduce_paper.ps1` |
+| 11 | Done | FastCDC behind `Chunker`. B4 vs B5 records shared bytes, manifest size, and times. No dedup ratio |
+| 12 | Done | Demo, Compose dashboard, paper index, release checklist |
+
+## Demo
+
+Prerequisites: Java 21. Docker is optional and only starts Redis, the tracker, Prometheus, and Grafana.
+
+```powershell
+scripts\demo.ps1
+```
+
+```sh
+./scripts/demo.sh
+```
+
+The script builds the tracker jar and runs one origin, one EDGE, and eight seeders in the demo JVM, then repeats the download with the leecher cache still warm. It prints measured peer, edge, origin, and cache bytes. It does not print an offload ratio. With Docker, Grafana is at <http://localhost:3000> (anonymous view is enabled) and Prometheus at <http://localhost:9090>. The metrics port is `9109`.
+
+`./mvnw verify` runs the same cold-then-warm check on the 2 KiB demo asset (`DemoRunTest`). It does not start Docker.
 
 Trust rules that must not drift:
 
