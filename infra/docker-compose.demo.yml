@@ -1,0 +1,43 @@
+# Demo profile (blueprint P12-01).
+# Redis, tracker, Prometheus, and Grafana.
+# Origin, the EDGE, and the eight peers run in the demo JVM (scripts/demo.ps1),
+# because that is the same peer-agent code the swarm tests use.
+services:
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "6379:6379"
+  tracker:
+    image: eclipse-temurin:21-jre
+    depends_on:
+      - redis
+    volumes:
+      - ../tracker-service/target/tracker-service-0.0.1-SNAPSHOT.jar:/app/tracker.jar:ro
+    command: ["java", "-jar", "/app/tracker.jar"]
+    environment:
+      SPRING_DATA_REDIS_HOST: redis
+    ports:
+      - "8080:8080"
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    depends_on:
+      - tracker
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+  grafana:
+    image: grafana/grafana:11.3.0
+    depends_on:
+      - prometheus
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
