@@ -171,8 +171,13 @@ Highest-seen sequence is kept in a `SequenceLedger` when the caller passes one (
 
 FIXED canonical JSON is unchanged. B1–B3 YAML numbers and LAPS weights are unchanged. CDC is not part of the scheduler baseline.
 
-## Not started
+## Phase 12 — Release — done
 
-- Phase 12 as in the blueprint (demo, Compose, Grafana, paper pack)
+- [x] P12-01 `scripts/demo.ps1` and `scripts/demo.sh`: origin, one EDGE, eight seeders, cold pass, warm pass, Prometheus text. Compose starts Redis, tracker, Prometheus, and Grafana when Docker is present
+- [x] P12-02 README status and demo steps
+- [x] P12-03 `research/analysis/index_runs.py` maps each config to a raw summary when one exists, and writes "no raw summary" otherwise
+- [x] P12-04 Checklist in `docs/RELEASE.md`. Tag `v1.0.0` only after `./mvnw verify` and that checklist
+
+The demo table does not state an offload ratio. B1–B3 YAML numbers and LAPS weights are unchanged.
 
 Peers must call `ManifestVerifier` with a trusted public key, then `ReleaseFreshness.accept`. `ManifestJson.parse` only checks JSON shape.
