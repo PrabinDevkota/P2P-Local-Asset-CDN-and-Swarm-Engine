@@ -2,7 +2,7 @@
 
 Task IDs are the blueprint's backlog IDs (§16). `./mvnw verify` is the gate for every step.
 
-Phases 0–11 are complete. **Phase 12 (demo, Compose, paper pack) is next.** Do not pull it forward.
+Phases 0–12 are complete. The release checklist is `docs/RELEASE.md`.
 
 ## What exists
 
@@ -130,10 +130,16 @@ Actuator `GET /actuator/health` and `GET /actuator/prometheus` are on the tracke
 | P11-02 | Version fixture | Insert, delete, and replace are exact. The edit is asserted |
 | P11-03 | B4 vs B5 | Shared bytes, manifest size, chunking time, elapsed time, and a 95% bootstrap interval. No ranking |
 
-## Later (do not pull forward)
+## Phase 12 — Release — complete
 
-- Phase 12 demo, Compose, and the paper pack
-- No invented Mbps, offload %, or dedup ratio
+| Step | Job | Outcome |
+| --- | --- | --- |
+| P12-01 | Demo profile + dashboard | `DemoRun` plus `infra/docker-compose.demo.yml` |
+| P12-02 | README | Status through Phase 12 and the demo command |
+| P12-03 | Paper pack | `research/analysis/index_runs.py` maps configs to raw summaries |
+| P12-04 | Release checklist | `docs/RELEASE.md` |
+
+No invented Mbps, offload %, or dedup ratio.
 
 ## Working rule
 
