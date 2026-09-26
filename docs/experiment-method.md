@@ -32,6 +32,8 @@ B1, B2, and B3 still differ only in `scheduler`. Adding `scale`, `network`, and 
 
 `research/configs/b5-fastcdc.yaml` names a FastCDC cross-version study. `CrossVersionStudy` records shared hash bytes, canonical manifest size, chunking time, elapsed time, and a 95% bootstrap interval for B4 and B5. It does not rank them and does not state a dedup ratio. `./mvnw verify` runs that study on a small file, not the 64 MiB size named in the YAML.
 
+`research/analysis/index_runs.py` lists every config under `research/configs/` and links a raw `summary.json` only when that file is present. `research/configs/demo-cold-warm.yaml` is the recruiter demo, not a paper baseline.
+
 ## What a number is allowed to mean
 
 Report only values taken from a raw run folder. Docker-host loopback is not a production WAN. Emulated client counts must be labeled as such.
