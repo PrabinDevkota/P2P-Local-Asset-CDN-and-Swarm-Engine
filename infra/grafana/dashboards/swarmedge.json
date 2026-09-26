@@ -1,0 +1,13 @@
+{
+  "title": "SwarmEdge demo",
+  "uid": "swarmedge-demo",
+  "schemaVersion": 39,
+  "timezone": "browser",
+  "panels": [
+    {"id": 1, "type": "stat", "title": "Origin bytes", "gridPos": {"h": 6, "w": 6, "x": 0, "y": 0}, "datasource": "Prometheus", "targets": [{"expr": "swarmedge_demo_origin_bytes", "refId": "A"}]},
+    {"id": 2, "type": "stat", "title": "Peer bytes", "gridPos": {"h": 6, "w": 6, "x": 6, "y": 0}, "datasource": "Prometheus", "targets": [{"expr": "swarmedge_demo_peer_bytes", "refId": "A"}]},
+    {"id": 3, "type": "stat", "title": "Completion time", "gridPos": {"h": 6, "w": 6, "x": 12, "y": 0}, "datasource": "Prometheus", "targets": [{"expr": "swarmedge_demo_completion_millis", "refId": "A"}]},
+    {"id": 4, "type": "stat", "title": "Active peers", "gridPos": {"h": 6, "w": 6, "x": 18, "y": 0}, "datasource": "Prometheus", "targets": [{"expr": "swarmedge_demo_active_peers", "refId": "A"}]},
+    {"id": 5, "type": "stat", "title": "Cache hits", "gridPos": {"h": 6, "w": 8, "x": 0, "y": 6}, "datasource": "Prometheus", "targets": [{"expr": "swarmedge_demo_cache_hits", "refId": "A"}]}
+  ]
+}
